@@ -146,32 +146,23 @@ class Particle:
                     surface.blit(s, (p['x'] - size, p['y'] - size))
 
 class ClearEffect:
-    def __init__(self, rows):
+    def __init__(self, rows, grid):
         self.rows = list(rows)
-        self.timer = 45
-        self.max_timer = 45
-        self.particles = []
+        self.timer = 40
+        self.max_timer = 40
+        self.cleared_blocks = []
         
         for row in self.rows:
-            base_color = NEON_COLORS[row % len(NEON_COLORS)]
-            for _ in range(8):
-                self.particles.append({
-                    'x': random.randint(0, GRID_WIDTH * BLOCK_SIZE),
-                    'y': row * BLOCK_SIZE + BLOCK_SIZE // 2,
-                    'vx': random.uniform(-5, 5),
-                    'vy': random.uniform(-8, 8),
-                    'life': random.randint(25, 45),
-                    'color': base_color,
-                    'size': random.randint(3, 6)
-                })
+            for col in range(GRID_WIDTH):
+                if grid[row][col]:
+                    self.cleared_blocks.append({
+                        'x': col,
+                        'y': row,
+                        'color': list(grid[row][col])
+                    })
 
     def update(self):
         self.timer -= 1
-        for p in self.particles:
-            p['x'] += p['vx']
-            p['y'] += p['vy']
-            p['vy'] += 0.4
-            p['life'] -= 1
 
     def is_alive(self):
         return self.timer > 0
@@ -182,35 +173,38 @@ class ClearEffect:
             
         progress = 1.0 - (self.timer / self.max_timer)
         
-        for idx, row in enumerate(self.rows):
-            color = NEON_COLORS[row % len(NEON_COLORS)]
-            
-            brightness = int(180 + 75 * math.sin(progress * math.pi * 3))
-            
-            for x in range(0, GRID_WIDTH * BLOCK_SIZE, 3):
-                wave = math.sin((x / 30.0) + progress * math.pi * 8 + row) * 40
-                alpha = int(brightness + wave)
-                alpha = max(0, min(255, alpha))
-                pygame.draw.line(surface, (*color, min(255, alpha)), 
-                              (x, row * BLOCK_SIZE), 
-                              (x + 2, (row + 1) * BLOCK_SIZE))
-            
-            if progress < 0.3:
-                flash = int(255 * (1 - progress / 0.3))
-                for x in range(0, GRID_WIDTH * BLOCK_SIZE, 8):
-                    if random.random() < 0.5:
-                        pygame.draw.line(surface, (255, 255, 255, flash),
-                                      (x, row * BLOCK_SIZE),
-                                      (x + 4, (row + 1) * BLOCK_SIZE))
-
-        for p in self.particles:
-            if p['life'] > 0:
-                alpha = int(p['life'] / 45.0 * 220)
-                size = max(1, int(p['size'] * (p['life'] / 45.0)))
-                if size > 0:
-                    s = pygame.Surface((size * 2, size * 2), pygame.SRCALPHA)
-                    pygame.draw.circle(s, (*p['color'], alpha), (size, size), size)
-                    surface.blit(s, (p['x'] - size, p['y'] - size))
+        if progress < 1.0:
+            for block in self.cleared_blocks:
+                x = block['x'] * BLOCK_SIZE
+                y = block['y'] * BLOCK_SIZE
+                color = block['color']
+                
+                flash = math.sin(progress * math.pi * 15) * 0.5 + 0.5
+                flash_alpha = int(255 * flash)
+                
+                glow_size = BLOCK_SIZE + 6
+                glow_x = x - 3
+                glow_y = y - 3
+                
+                glow_color = list(color)
+                for i in range(3, 0, -1):
+                    glow_alpha = int(flash_alpha * 0.12 * (1 - i / 4))
+                    glow_rect = pygame.Rect(glow_x - i * 2, glow_y - i * 2, glow_size + i * 4, glow_size + i * 4)
+                    s_glow = pygame.Surface((glow_size + i * 4, glow_size + i * 4), pygame.SRCALPHA)
+                    pygame.draw.rect(s_glow, (*glow_color, glow_alpha), s_glow.get_rect(), border_radius=6)
+                    surface.blit(s_glow, (glow_x - i * 2, glow_y - i * 2))
+                
+                brightness = int(150 + 105 * flash)
+                display_color = tuple(min(255, c + brightness - 150) for c in color)
+                
+                s = pygame.Surface((BLOCK_SIZE - 4, BLOCK_SIZE - 4), pygame.SRCALPHA)
+                pygame.draw.rect(s, (*display_color, flash_alpha), s.get_rect(), border_radius=4)
+                surface.blit(s, (x + 2, y + 2))
+                
+                highlight_color = tuple(min(255, c + 100) for c in color)
+                s_highlight = pygame.Surface((BLOCK_SIZE - 8, (BLOCK_SIZE - 8) // 2), pygame.SRCALPHA)
+                pygame.draw.rect(s_highlight, (*highlight_color, int(flash_alpha * 0.5)), s_highlight.get_rect(), border_radius=3)
+                surface.blit(s_highlight, (x + 4, y + 4))
 
 class TetrisGame:
     def __init__(self):
@@ -241,6 +235,18 @@ class TetrisGame:
         self.combo_count = 0
         self.last_clear_time = 0
         self.combo_timeout = 2000
+        self.display_combo = 0
+        self.display_combo_score = 0
+        self.display_combo_x = 0
+        self.display_combo_y = 0
+        self.display_combo_timer = 0
+        self.pending_clear_rows = None
+        self.is_clearing = False
+        
+        self.key_repeat_delay = 80
+        self.key_repeat_interval = 15
+        self.last_key_time = {pygame.K_LEFT: 0, pygame.K_RIGHT: 0, pygame.K_DOWN: 0}
+        self.keys_pressed = {pygame.K_LEFT: False, pygame.K_RIGHT: False, pygame.K_DOWN: False}
 
         self.spawn_piece()
 
@@ -259,15 +265,20 @@ class TetrisGame:
         if self.next_piece is None:
             shape_idx = random.randint(0, len(SHAPES) - 1)
             color_idx = random.randint(0, len(NEON_COLORS) - 1)
+            new_shape = [row[:] for row in SHAPES[shape_idx]]
+            shape_width = max(len(row) for row in new_shape)
             self.current_piece = {
-                'shape': [row[:] for row in SHAPES[shape_idx]],
+                'shape': new_shape,
                 'color': NEON_COLORS[color_idx],
-                'x': GRID_WIDTH // 2 - len(SHAPES[shape_idx][0]) // 2,
+                'x': (GRID_WIDTH - shape_width) // 2,
                 'y': 0,
                 'color_idx': color_idx
             }
         else:
             self.current_piece = self.next_piece
+            shape_width = max(len(row) for row in self.current_piece['shape'])
+            self.current_piece['x'] = (GRID_WIDTH - shape_width) // 2
+            self.current_piece['y'] = 0
 
         shape_idx = random.randint(0, len(SHAPES) - 1)
         color_idx = random.randint(0, len(NEON_COLORS) - 1)
@@ -293,6 +304,18 @@ class TetrisGame:
                     if new_y >= 0 and self.grid[new_y][new_x]:
                         return True
         return False
+
+    def get_ghost_position(self):
+        if not self.current_piece:
+            return None
+        shape = self.current_piece['shape']
+        x = self.current_piece['x']
+        y = self.current_piece['y']
+        while not self.check_collision(x, y + 1, shape):
+            y += 1
+        if y == self.current_piece['y']:
+            return None
+        return (x, y)
 
     def rotate_piece(self):
         shape = self.current_piece['shape']
@@ -348,19 +371,22 @@ class TetrisGame:
                 self.combo_count = 1
             self.last_clear_time = current_time
             
+            if self.combo_count >= 1:
+                self.display_combo = self.combo_count - 1
+                self.display_combo_x = self.current_piece['x'] + len(shape[0]) // 2
+                self.display_combo_y = self.current_piece['y']
+                self.display_combo_timer = 60
+            
             base_score = cleared ** 2
             combo_multiplier = self.combo_count ** 2
             score_gain = base_score * combo_multiplier * (2 ** (self.level - 1))
             self.score += score_gain
             
+            if self.combo_count >= 1:
+                self.display_combo_score = (2 ** self.display_combo) * self.level
+            
             self.total_lines_cleared += cleared
             self.lines_cleared += cleared
-
-            center_x = self.current_piece['x'] * BLOCK_SIZE + len(shape[0]) * BLOCK_SIZE // 2
-            center_y = self.current_piece['y'] * BLOCK_SIZE + len(shape) * BLOCK_SIZE // 2
-            
-            particle_count = 30 + cleared * 25
-            self.particles_list.append(Particle(center_x, center_y, random.choice(NEON_COLORS), particle_count))
 
             if self.total_lines_cleared >= self.level * 10:
                 self.level_up()
@@ -386,8 +412,19 @@ class TetrisGame:
                 cleared_rows.append(row)
 
         if cleared_rows:
+            self.pending_clear_rows = cleared_rows
+            self.is_clearing = True
+
+        return len(cleared_rows)
+    
+    def process_pending_clear(self):
+        if self.is_clearing and self.pending_clear_rows:
+            cleared_rows = self.pending_clear_rows
+            
+            grid_copy = [row[:] for row in self.grid]
+            
             try:
-                self.clear_effects.append(ClearEffect(cleared_rows))
+                self.clear_effects.append(ClearEffect(cleared_rows, grid_copy))
             except:
                 pass
 
@@ -400,19 +437,20 @@ class TetrisGame:
                 new_grid.insert(0, [0] * GRID_WIDTH)
             
             self.grid = new_grid
-
-        return len(cleared_rows)
+            
+            self.pending_clear_rows = None
+            self.is_clearing = False
 
     def level_up(self):
         self.level += 1
         self.fall_speed = max(100, 1000 - (self.level - 1) * 100)
         
         self.is_rainbow_flashing = True
-        self.rainbow_timer = 78
+        self.rainbow_timer = 60
         self.rainbow_phase = 0
         
-        self.screen_shake_timer = 60
-        self.level_shake_timer = 60
+        self.screen_shake_timer = 30
+        self.level_shake_timer = 30
 
     def update(self):
         self.trail.update()
@@ -442,6 +480,21 @@ class TetrisGame:
             self.rainbow_phase += 0.18
             if self.rainbow_timer <= 0:
                 self.is_rainbow_flashing = False
+
+        if self.is_clearing:
+            if self.display_combo_timer > 0:
+                self.display_combo_timer -= 1
+            
+            if not self.clear_effects:
+                self.process_pending_clear()
+            else:
+                all_done = all(e.timer <= 0 for e in self.clear_effects)
+                if all_done:
+                    self.process_pending_clear()
+            return
+
+        if self.display_combo_timer > 0:
+            self.display_combo_timer -= 1
 
         if self.game_over or self.paused:
             return
@@ -475,23 +528,43 @@ class TetrisGame:
         block_rect = pygame.Rect(x * BLOCK_SIZE + 2, y * BLOCK_SIZE + 2, BLOCK_SIZE - 4, BLOCK_SIZE - 4)
         
         gradient_colors = [
-            tuple(min(255, c + 60) for c in color),
+            tuple(min(255, c + 80) for c in color),
+            tuple(min(255, c + 30) for c in color),
             color,
-            tuple(max(0, c - 40) for c in color)
+            tuple(max(0, c - 30) for c in color),
+            tuple(max(0, c - 60) for c in color)
         ]
         
         s = pygame.Surface((BLOCK_SIZE - 4, BLOCK_SIZE - 4), pygame.SRCALPHA)
         
         for i in range(BLOCK_SIZE - 4):
             ratio = i / (BLOCK_SIZE - 4)
-            if ratio < 0.5:
+            if ratio < 0.25:
+                idx = 0
+                local_ratio = ratio / 0.25
                 interp_color = [
-                    gradient_colors[0][c] * (1 - ratio * 2) + gradient_colors[1][c] * (ratio * 2)
+                    gradient_colors[1][c] * (1 - local_ratio) + gradient_colors[0][c] * local_ratio
+                    for c in range(3)
+                ]
+            elif ratio < 0.5:
+                idx = 1
+                local_ratio = (ratio - 0.25) / 0.25
+                interp_color = [
+                    gradient_colors[2][c] * (1 - local_ratio) + gradient_colors[1][c] * local_ratio
+                    for c in range(3)
+                ]
+            elif ratio < 0.75:
+                idx = 2
+                local_ratio = (ratio - 0.5) / 0.25
+                interp_color = [
+                    gradient_colors[3][c] * (1 - local_ratio) + gradient_colors[2][c] * local_ratio
                     for c in range(3)
                 ]
             else:
+                idx = 3
+                local_ratio = (ratio - 0.75) / 0.25
                 interp_color = [
-                    gradient_colors[1][c] * (1 - (ratio - 0.5) * 2) + gradient_colors[2][c] * ((ratio - 0.5) * 2)
+                    gradient_colors[4][c] * (1 - local_ratio) + gradient_colors[3][c] * local_ratio
                     for c in range(3)
                 ]
             pygame.draw.line(s, [int(c) for c in interp_color], (i, 0), (i, BLOCK_SIZE - 5))
@@ -500,35 +573,71 @@ class TetrisGame:
 
         highlight = pygame.Rect(x * BLOCK_SIZE + 4, y * BLOCK_SIZE + 4, BLOCK_SIZE - 10, BLOCK_SIZE // 3)
         highlight_s = pygame.Surface((highlight.width, highlight.height), pygame.SRCALPHA)
-        pygame.draw.rect(highlight_s, (255, 255, 255, 100), highlight_s.get_rect(), border_radius=3)
+        pygame.draw.rect(highlight_s, (255, 255, 255, 150), highlight_s.get_rect(), border_radius=3)
         surface.blit(highlight_s, (highlight.x, highlight.y))
+        
+        highlight2 = pygame.Rect(x * BLOCK_SIZE + 6, y * BLOCK_SIZE + 6, 4, BLOCK_SIZE // 4)
+        highlight2_s = pygame.Surface((highlight2.width, highlight2.height), pygame.SRCALPHA)
+        pygame.draw.rect(highlight2_s, (255, 255, 255, 120), highlight2_s.get_rect(), border_radius=2)
+        surface.blit(highlight2_s, (highlight2.x, highlight2.y))
 
-        border_color = tuple(min(255, c + 80) for c in color)
+        border_color = tuple(min(255, c + 100) for c in color)
         pygame.draw.rect(surface, border_color, block_rect, 2, border_radius=4)
 
         reflection = pygame.Rect(x * BLOCK_SIZE + 6, y * BLOCK_SIZE + 6, 4, 4)
-        pygame.draw.rect(surface, (255, 255, 255, 150), reflection, border_radius=2)
+        pygame.draw.rect(surface, (255, 255, 255, 180), reflection, border_radius=2)
+        
+        reflection2 = pygame.Rect(x * BLOCK_SIZE + BLOCK_SIZE - 10, y * BLOCK_SIZE + BLOCK_SIZE - 10, 3, 3)
+        pygame.draw.rect(surface, (255, 255, 255, 120), reflection2, border_radius=1)
+
+    def draw_ghost_block(self, surface, x, y, color):
+        rect = pygame.Rect(x * BLOCK_SIZE + 2, y * BLOCK_SIZE + 2, BLOCK_SIZE - 4, BLOCK_SIZE - 4)
+        
+        ghost_color = list(color)
+        s = pygame.Surface((BLOCK_SIZE - 4, BLOCK_SIZE - 4), pygame.SRCALPHA)
+        
+        pygame.draw.rect(s, (*ghost_color, 40), s.get_rect(), border_radius=4)
+        
+        pygame.draw.rect(s, (*ghost_color, 80), s.get_rect(), 2, border_radius=4)
+        
+        surface.blit(s, (rect.x, rect.y))
 
     def draw(self):
         if self.is_rainbow_flashing:
-            progress = 1.0 - (self.rainbow_timer / 78.0)
-            wave = math.sin(self.rainbow_phase) * 0.35 + 0.65
+            progress = 1.0 - (self.rainbow_timer / 60.0)
+            center_x = SCREEN_WIDTH // 2
+            center_y = SCREEN_HEIGHT // 2
+            max_radius = math.sqrt(center_x**2 + center_y**2)
             
             screen.fill((0, 0, 0))
             
-            rainbow_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+            wave_radius = progress * max_radius * 1.3
             
-            for y in range(SCREEN_HEIGHT):
-                hue = ((y / float(SCREEN_HEIGHT)) * 90 + pygame.time.get_ticks() / 15.0) % 360
-                rainbow_color = pygame.Color(0, 0, 0)
-                rainbow_color.hsva = (int(hue), 100, int(55 * wave), 100)
-                
-                wave_offset = math.sin((y / 40.0) + self.rainbow_phase * 2.5) * 30
-                alpha = int(200 + wave_offset)
-                
-                pygame.draw.line(rainbow_surface, (*rainbow_color[:3], min(255, max(0, alpha))), (0, y), (SCREEN_WIDTH, y))
+            num_waves = 5
+            for w in range(num_waves):
+                wave_dist = wave_radius - w * 40
+                if wave_dist > 0:
+                    wave_intensity = max(0, 1 - w / num_waves) * (1 - progress * 0.4)
+                    
+                    hue = (progress * 180 + w * 30) % 360
+                    neon_color = pygame.Color(0, 0, 0)
+                    neon_color.hsva = (int(hue), 100, int(80 * wave_intensity), 100)
+                    
+                    alpha = int(150 * wave_intensity)
+                    
+                    pygame.draw.circle(screen, (*neon_color[:3], alpha), 
+                                    (center_x, center_y), int(wave_dist), 20)
+                    
+                    pygame.draw.circle(screen, (*neon_color[:3], int(alpha * 0.5)), 
+                                    (center_x, center_y), int(wave_dist - 10), 15)
             
-            screen.blit(rainbow_surface, (0, 0))
+            if progress < 0.5:
+                for i in range(3):
+                    ring_radius = progress * max_radius * 1.3 * (1 + i * 0.15)
+                    ring_alpha = int(100 * (1 - progress * 2) * (1 - i * 0.2))
+                    if ring_alpha > 0:
+                        pygame.draw.circle(screen, (255, 255, 255, ring_alpha), 
+                                        (center_x, center_y), int(ring_radius), 2)
         else:
             screen.fill((5, 5, 15))
 
@@ -549,6 +658,8 @@ class TetrisGame:
                 grid_color = self.grid[row][col]
                 if grid_color:
                     self.draw_neon_block_glass(game_surface, col, row, grid_color)
+                elif self.is_clearing and self.pending_clear_rows and row in self.pending_clear_rows:
+                    pass
 
         if self.current_piece:
             shape = self.current_piece['shape']
@@ -561,6 +672,17 @@ class TetrisGame:
                                            self.current_piece['y'] + row,
                                            color)
 
+            ghost_pos = self.get_ghost_position()
+            if ghost_pos:
+                ghost_x, ghost_y = ghost_pos
+                for row in range(len(shape)):
+                    for col in range(len(shape[row])):
+                        if shape[row][col]:
+                            self.draw_ghost_block(game_surface,
+                                                ghost_x + col,
+                                                ghost_y + row,
+                                                color)
+
         self.trail.draw(game_surface)
 
         for effect in self.clear_effects:
@@ -570,6 +692,29 @@ class TetrisGame:
 
         for particles in self.particles_list:
             particles.draw(screen)
+
+        if self.display_combo_timer > 0 and self.display_combo >= 1:
+            combo_x = self.display_combo_x * BLOCK_SIZE + offset_x
+            combo_y = self.display_combo_y * BLOCK_SIZE + offset_y
+            
+            pulse = math.sin(self.display_combo_timer * 0.3) * 0.3 + 0.7
+            alpha = int(self.display_combo_timer / 60.0 * 255)
+            
+            font_combo = pygame.font.Font(FONT_PATH, 20) if FONT_PATH else pygame.font.Font(None, 20)
+            combo_text = f"连击{self.display_combo}"
+            combo_surf = font_combo.render(combo_text, True, (255, 200, 0))
+            combo_surf.set_alpha(alpha)
+            
+            score_text = f"+{self.display_combo_score}"
+            score_surf = font_text.render(score_text, True, (0, 255, 127))
+            score_surf.set_alpha(alpha)
+            
+            min_x = combo_surf.get_width() // 2 + 5
+            max_x = GRID_WIDTH * BLOCK_SIZE - combo_surf.get_width() // 2 - 5
+            combo_x = max(min_x, min(max_x, combo_x))
+            
+            screen.blit(combo_surf, (combo_x - combo_surf.get_width() // 2, combo_y - 30))
+            screen.blit(score_surf, (combo_x - score_surf.get_width() // 2, combo_y - 10))
 
         info_x = GRID_WIDTH * BLOCK_SIZE + 15
         info_y_start = 30
@@ -620,8 +765,7 @@ class TetrisGame:
             ("分数", f"{self.score}"),
             ("最高分", f"{self.high_score}"),
             ("等级", f"{self.level}"),
-            ("消除行", f"{self.total_lines_cleared}"),
-            ("连击", f"x{self.combo_count}" if self.combo_count > 0 else "-")
+            ("消除行", f"{self.total_lines_cleared}")
         ]
 
         for label, value in info_items:
@@ -662,7 +806,7 @@ class TetrisGame:
             
             font_gameover = pygame.font.Font(FONT_PATH, 36) if FONT_PATH else pygame.font.Font(None, 36)
             text = font_gameover.render("游戏结束", True, (255, 50, 50))
-            text_rect = text.get_rect(center=(GRID_WIDTH * BLOCK_SIZE // 2, SCREEN_HEIGHT // 2 - 20))
+            text_rect = text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 20))
             
             glow_color = (255, 100, 100)
             for ox in [-2, 2]:
@@ -674,20 +818,23 @@ class TetrisGame:
 
             font_restart = pygame.font.Font(FONT_PATH, 18) if FONT_PATH else pygame.font.Font(None, 18)
             text_restart = font_restart.render("按 R 重新开始", True, (255, 255, 255))
-            screen.blit(text_restart, (GRID_WIDTH * BLOCK_SIZE // 2 - 50, SCREEN_HEIGHT // 2 + 25))
+            text_restart_rect = text_restart.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 25))
+            screen.blit(text_restart, text_restart_rect)
 
         if self.paused and not self.game_over:
-            overlay = pygame.Surface((GRID_WIDTH * BLOCK_SIZE, GRID_HEIGHT * BLOCK_SIZE), pygame.SRCALPHA)
+            overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
             overlay.fill((0, 0, 0, 160))
             screen.blit(overlay, (0, 0))
             
             font_pause = pygame.font.Font(FONT_PATH, 32) if FONT_PATH else pygame.font.Font(None, 32)
             text = font_pause.render("暂停", True, (255, 255, 0))
-            text_rect = text.get_rect(center=(GRID_WIDTH * BLOCK_SIZE // 2, SCREEN_HEIGHT // 2))
+            text_rect = text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2))
             screen.blit(text, text_rect)
 
     def run(self):
         while True:
+            current_time = pygame.time.get_ticks()
+            
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     pygame.quit()
@@ -701,10 +848,16 @@ class TetrisGame:
                         self.paused = not self.paused
                     elif not self.paused:
                         if event.key == pygame.K_LEFT:
+                            self.keys_pressed[pygame.K_LEFT] = True
+                            self.last_key_time[pygame.K_LEFT] = current_time
                             self.move_piece(-1, 0)
                         elif event.key == pygame.K_RIGHT:
+                            self.keys_pressed[pygame.K_RIGHT] = True
+                            self.last_key_time[pygame.K_RIGHT] = current_time
                             self.move_piece(1, 0)
                         elif event.key == pygame.K_DOWN:
+                            self.keys_pressed[pygame.K_DOWN] = True
+                            self.last_key_time[pygame.K_DOWN] = current_time
                             self.move_piece(0, 1)
                         elif event.key == pygame.K_UP:
                             self.rotate_piece()
@@ -712,6 +865,32 @@ class TetrisGame:
                             while self.move_piece(0, 1):
                                 pass
                             self.lock_piece()
+
+                if event.type == pygame.KEYUP:
+                    if event.key == pygame.K_LEFT:
+                        self.keys_pressed[pygame.K_LEFT] = False
+                    elif event.key == pygame.K_RIGHT:
+                        self.keys_pressed[pygame.K_RIGHT] = False
+                    elif event.key == pygame.K_DOWN:
+                        self.keys_pressed[pygame.K_DOWN] = False
+
+            if not self.game_over and not self.paused and not self.is_clearing:
+                for key in [pygame.K_LEFT, pygame.K_RIGHT, pygame.K_DOWN]:
+                    if self.keys_pressed[key]:
+                        elapsed = current_time - self.last_key_time[key]
+                        if elapsed >= self.key_repeat_delay:
+                            repeat_count = (elapsed - self.key_repeat_delay) // self.key_repeat_interval + 1
+                            for _ in range(repeat_count):
+                                if key == pygame.K_LEFT:
+                                    if not self.move_piece(-1, 0):
+                                        break
+                                elif key == pygame.K_RIGHT:
+                                    if not self.move_piece(1, 0):
+                                        break
+                                elif key == pygame.K_DOWN:
+                                    if not self.move_piece(0, 1):
+                                        break
+                            self.last_key_time[key] = current_time
 
             self.update()
             self.draw()
