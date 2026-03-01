@@ -613,11 +613,11 @@ class Game:
                 return False
         return True
     
-    def move_piece(self, dx: int, dy: int) -> bool:
+    def move_piece(self, dx: int, dy: int, add_trail: bool = False) -> bool:
         if self.current_piece and self.is_valid_position(self.current_piece, dx, dy):
             self.current_piece.x += dx
             self.current_piece.y += dy
-            if dy > 0:
+            if dy > 0 and add_trail:
                 # 对于同一列的方块，只保留最下面的那个的拖影，避免垂直重叠
                 columns = {}
                 for x, y in self.current_piece.get_blocks():
@@ -645,7 +645,7 @@ class Game:
         if not self.current_piece:
             return
         drop_distance = 0
-        while self.move_piece(0, 1):
+        while self.move_piece(0, 1, add_trail=True):  # 硬降产生拖影
             drop_distance += 1
         self.lock_piece()
     
@@ -1378,7 +1378,7 @@ class Game:
                     self.move_piece(1, 0)
                     self.key_repeat_timers[pygame.K_RIGHT] = self.key_repeat_delay
                 elif event.key == pygame.K_DOWN:
-                    self.move_piece(0, 1)
+                    self.move_piece(0, 1, add_trail=True)  # 玩家主动加速下落，产生拖影
                     self.key_repeat_timers[pygame.K_DOWN] = self.key_repeat_delay
                 elif event.key == pygame.K_UP:
                     self.rotate_piece()
@@ -1415,7 +1415,7 @@ class Game:
                         elif key == pygame.K_RIGHT:
                             self.move_piece(1, 0)
                         elif key == pygame.K_DOWN:
-                            self.move_piece(0, 1)
+                            self.move_piece(0, 1, add_trail=True)  # 玩家主动加速下落，产生拖影
     
     def run(self):
         running = True
