@@ -102,24 +102,24 @@ class Particle:
         if self.life <= 0:
             return
         trail_len = len(self.trail)
-        alpha_multiplier = 1.15 + self.alpha_bonus
+        alpha_multiplier = 1.5 + self.alpha_bonus  # 调高20%透明度
         for i, (tx, ty, tc, tl) in enumerate(self.trail):
             progress = (i + 1) / trail_len
-            trail_alpha = int(100 * alpha_multiplier * tl * progress * 0.6)
+            trail_alpha = min(255, int(100 * alpha_multiplier * tl * progress * 0.6))  # 调高20%
             trail_size = max(1, int(self.size * progress * 0.7))
             trail_surf = pygame.Surface((trail_size * 2 + 4, trail_size * 2 + 4), pygame.SRCALPHA)
             pygame.draw.circle(trail_surf, (*tc, trail_alpha), (trail_size + 2, trail_size + 2), trail_size)
             surface.blit(trail_surf, (int(tx - trail_size - 2), int(ty - trail_size - 2)))
-        
-        alpha = int(200 * alpha_multiplier * self.life)
+
+        alpha = min(255, int(240 * alpha_multiplier * self.life))  # 调高20%并限制最大值
         size = max(1, int(self.size * self.life))
-        
+
         glow_surf = pygame.Surface((size * 4 + 4, size * 4 + 4), pygame.SRCALPHA)
         center = size * 2 + 2
         for i in range(size + 3, size, -1):
-            g_alpha = int(alpha * 0.15 * (1 - (i - size) / 3))
+            g_alpha = min(255, int(alpha * 0.15 * (1 - (i - size) / 3)))
             pygame.draw.circle(glow_surf, (*self.color, g_alpha), (center, center), i)
-        pygame.draw.circle(glow_surf, (*self.color, int(alpha * 0.7)), (center, center), size)
+        pygame.draw.circle(glow_surf, (*self.color, min(255, int(alpha * 0.7))), (center, center), size)
         surface.blit(glow_surf, (int(self.x - center), int(self.y - center)))
 
 class FloatingText:
