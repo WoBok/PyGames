@@ -130,35 +130,154 @@ class FloatingText:
         self.color = color
         self.base_size = int(size * 1.3)
         self.life = 1.0
-        self.vy = -1.5
-        self.scale = 0.3
-        self.target_scale = 1.0
+        self.vy = -1.0  # 减慢上升速度
+        self.scale = 0.5  # 初始缩放较小
+        self.alpha = 0  # 初始透明度为0（淡入）
         self.is_tetris = is_tetris
         self.combo_count = combo_count
-        self.shake_offset = 1.5 if is_tetris else 0
-        self.appear_time = 0.3
+        self.shake_offset = 0
         self.neon_pulse = 0
         self.shake_phase = 0
         self.shake_speed = 8
-    
-    def update(self):
-        self.neon_pulse += 0.15
-        self.shake_phase += self.shake_speed * 0.1
-        
-        if self.appear_time > 0:
-            self.appear_time -= 0.02
-            self.scale = 0.3 + (self.target_scale - 0.3) * (1 - self.appear_time / 0.3)
-            if self.is_tetris and self.shake_offset > 0:
-                self.shake_offset *= 0.85
-        else:
-            self.y += self.vy
-            self.vy *= 0.98
-            self.life -= 0.022
-            self.scale = self.target_scale + (1.0 - self.life) * 0.15
-            
-            if self.combo_count > 0:
-                shake_intensity = min(2, self.combo_count * 0.4)
-                self.shake_offset = shake_intensity
+        self.rainbow_phase = 0  # TETRIS 彩虹效果
+        # 动画阶段：'fade_in' -> 'hold' -> 'fade_out'
+        self.phase = 'fade_in'
+        self.phase_timer = 0
+        self.fade_in_duration = 0.25  # 淡入时间
+        self.hold_duration = 0.8  # 停留时间
+        self.fade_out_duration = 0.5  # 淡出时间
+
+    def update(self, dt: float = 0.016):
+        # 更新脉冲效果
+        self.neon_pulse += 8 * dt
+        self.shake_phase += self.shake_speed * dt * 6
+        self.rainbow_phase += 6 * dt
+
+        # 更新震动
+        if self.shake_offset > 0:
+            self.shake_offset *= 0.95
+
+        # 平滑上升
+        self.y += self.vy * dt * 60
+
+        # 阶段动画
+        self.phase_timer += dt
+
+        if self.phase == 'fade_in':
+            # 淡入阶段：缩放 0.5 -> 1.0，透明度 0 -> 255
+            progress = min(1, self.phase_timer / self.fade_in_duration)
+            # 使用 easeOutQuad 缓动
+            ease_progress = 1 - (1 - progress) ** 2
+            self.scale = 0.7 + 0.3 * ease_progress  # 从0.7平滑到1.0
+            self.alpha = int(255 * ease_progress)
+
+            if progress >= 1:
+                self.phase = 'hold'
+                self.phase_timer = 0
+                self.scale = 1.0
+                self.alpha = 255
+                if self.is_tetris or self.combo_count > 0:
+                    self.shake_offset = 2
+
+        elif self.phase == 'hold':
+            # 停留阶段：保持
+            self.scale = 1.0
+            self.alpha = 255
+
+            if self.phase_timer >= self.hold_duration:
+                self.phase = 'fade_out'
+                self.phase_timer = 0
+
+        elif self.phase == 'fade_out':
+            # 淡出阶段：保持大小，透明度 255 -> 0
+            progress = min(1, self.phase_timer / self.fade_out_duration)
+            # 使用 easeInQuad 缓动
+            ease_progress = progress ** 2
+            self.scale = 1.0  # 保持原大小，不再放大
+            self.alpha = int(255 * (1 - ease_progress))
+            self.life = 1 - progress
+
+    def get_rainbow_color(self, offset: float = 0) -> Tuple[int, int, int]:
+        """获取彩虹颜色 - TETRIS 专用"""
+        phase = self.rainbow_phase + offset
+        return (
+            int(127 + 127 * math.sin(phase)),
+            int(127 + 127 * math.sin(phase + 2.094)),
+            int(127 + 127 * math.sin(phase + 4.189)),
+        )
+
+    def get_gold_color(self, pulse: float) -> Tuple[int, int, int]:
+        """获取金色脉冲颜色 - TETRIS 专用"""
+        base_gold = (255, 215, 0)
+        pulse_intensity = 0.5 + 0.5 * math.sin(pulse)
+        return (
+            255,
+            int(215 + 40 * pulse_intensity),
+            int(50 + 50 * pulse_intensity),
+        )
+
+    def draw_tetris_text(self, surface: pygame.Surface, font: pygame.font.Font, text: str, x: int, y: int, alpha: int):
+        """绘制 TETRIS 专用炫酷文字 - 彩虹光晕 + 金色核心"""
+        pulse = 0.7 + 0.3 * math.sin(self.neon_pulse)
+
+        text_surf = font.render(text, True, (255, 255, 255))
+        text_width = text_surf.get_width()
+        text_height = text_surf.get_height()
+
+        # 创建大尺寸光晕 Surface
+        glow_size = 8
+        total_width = text_width + glow_size * 4
+        total_height = text_height + glow_size * 4
+        glow_surf = pygame.Surface((total_width, total_height), pygame.SRCALPHA)
+
+        # 绘制多层彩虹光晕
+        for layer in range(glow_size, 0, -1):
+            layer_progress = layer / glow_size
+            rainbow_offset = layer * 0.3
+            rainbow_color = self.get_rainbow_color(rainbow_offset)
+            g_alpha = int(60 * pulse * layer_progress)
+
+            for dx in range(-layer, layer + 1, 1):
+                for dy in range(-layer, layer + 1, 1):
+                    if dx * dx + dy * dy <= layer * layer:
+                        temp_surf = font.render(text, True, rainbow_color)
+                        temp_surf.set_alpha(g_alpha)
+                        glow_surf.blit(temp_surf, (glow_size * 2 + dx, glow_size * 2 + dy))
+
+        # 绘制金色中层光晕
+        gold_color = self.get_gold_color(self.neon_pulse * 2)
+        for dx in range(-2, 3, 1):
+            for dy in range(-2, 3, 1):
+                if dx != 0 or dy != 0:
+                    temp_surf = font.render(text, True, gold_color)
+                    temp_surf.set_alpha(int(150 * pulse))
+                    glow_surf.blit(temp_surf, (glow_size * 2 + dx, glow_size * 2 + dy))
+
+        glow_surf.set_alpha(alpha)
+        surface.blit(glow_surf, (x - glow_size * 2, y - glow_size * 2))
+
+        # 绘制白色核心文字
+        core_surf = font.render(text, True, (255, 255, 255))
+        core_surf.set_alpha(alpha)
+        surface.blit(core_surf, (x, y))
+
+        # 绘制金色高光
+        highlight_surf = font.render(text, True, gold_color)
+        highlight_surf.set_alpha(int(alpha * 0.6 * pulse))
+        surface.blit(highlight_surf, (x + 1, y + 1))
+
+        # 绘制闪烁星星效果
+        for i in range(5):
+            star_phase = self.rainbow_phase * 3 + i * 1.2
+            star_alpha = int(alpha * 0.8 * (0.5 + 0.5 * math.sin(star_phase)))
+            if star_alpha > 30:
+                star_x = x + random.randint(0, text_width)
+                star_y = y + random.randint(0, text_height // 2)
+                star_size = random.randint(2, 4)
+                star_surf = pygame.Surface((star_size * 4, star_size * 4), pygame.SRCALPHA)
+                pygame.draw.circle(star_surf, (*self.get_rainbow_color(i), star_alpha),
+                                 (star_size * 2, star_size * 2), star_size)
+                surface.blit(star_surf, (star_x - star_size * 2, star_y - star_size * 2))
     
     def draw_neon_text(self, surface: pygame.Surface, font: pygame.font.Font, text: str, x: int, y: int, color: Tuple[int, int, int], alpha: int):
         pulse = 0.7 + 0.3 * math.sin(self.neon_pulse)
@@ -190,27 +309,36 @@ class FloatingText:
         surface.blit(highlight_surf, (x + 1, y + 1))
     
     def draw(self, surface: pygame.Surface, font: pygame.font.Font, font_name: str = None):
-        if self.life <= 0:
+        if self.alpha <= 0:
             return
-        alpha = int(255 * min(1, self.life * 1.5))
-        
+
         shake_x = int(math.sin(self.shake_phase) * self.shake_offset) if self.shake_offset > 0.5 else 0
         shake_y = int(math.cos(self.shake_phase * 1.3) * self.shake_offset) if self.shake_offset > 0.5 else 0
-        
+
         new_size = max(8, int(self.base_size * self.scale))
+        # TETRIS 文字放大 1.5 倍
+        if self.is_tetris:
+            new_size = int(new_size * 1.5)
+
         if font_name:
             scaled_font = pygame.font.SysFont(font_name, new_size, bold=True)
         else:
             scaled_font = pygame.font.Font(None, new_size, bold=True)
-        
+
         text_surf = scaled_font.render(self.text, True, self.color)
         scaled_width = text_surf.get_width()
         scaled_height = text_surf.get_height()
-        
-        self.draw_neon_text(surface, scaled_font, self.text, 
-                          int(self.x - scaled_width // 2 + shake_x), 
-                          int(self.y - scaled_height // 2 + shake_y), 
-                          self.color, alpha)
+
+        draw_x = int(self.x - scaled_width // 2 + shake_x)
+        draw_y = int(self.y - scaled_height // 2 + shake_y)
+
+        # TETRIS 使用专用炫酷文字效果
+        if self.is_tetris:
+            self.draw_tetris_text(surface, scaled_font, self.text, draw_x, draw_y, self.alpha)
+        else:
+            self.draw_neon_text(surface, scaled_font, self.text,
+                              draw_x, draw_y,
+                              self.color, self.alpha)
 
 class Star:
     def __init__(self, x: float, y: float):
@@ -336,6 +464,11 @@ class Game:
         self.edge_pulse = 0  # 边缘脉冲
         self.block_flash = 0  # 方块闪光
 
+        # TETRIS 特效
+        self.tetris_effects: List[TetrisEffect] = []
+        self.slow_motion_timer = 0  # 慢动作计时器
+        self.slow_motion_factor = 1.0  # 慢动作系数
+
         self.state = "start"
         self.previous_state = "start"
         self.time = 0
@@ -391,6 +524,9 @@ class Game:
         self.shockwaves = []
         self.edge_pulse = 0
         self.block_flash = 0
+        self.tetris_effects = []
+        self.slow_motion_timer = 0
+        self.slow_motion_factor = 1.0
 
     def new_piece(self) -> Tetromino:
         return Tetromino(random.choice(list(SHAPES.keys())))
@@ -517,7 +653,7 @@ class Game:
         multiplier = 2 ** (self.level - 1)
         line_score = (lines_cleared ** 2) * multiplier
         self.score += line_score
-        
+
         self.combo += 1
         combo_bonus = 0
         if self.combo > 1:
@@ -525,10 +661,8 @@ class Game:
             self.score += combo_bonus
             shake_intensity = min(5, self.combo)
             self.combo_shake = shake_intensity * 15
-        
-        if lines_cleared == 4:
-            self.shake_offset = [random.randint(-8, 8), random.randint(-8, 8)]
-        
+
+        # 先计算 y_pos 位置
         if self.current_piece:
             blocks = self.current_piece.get_blocks()
             if blocks:
@@ -538,17 +672,32 @@ class Game:
                 y_pos = BOARD_Y + BOARD_HEIGHT // 2
         else:
             y_pos = BOARD_Y + BOARD_HEIGHT // 2
-        
+
+        if lines_cleared == 4:
+            # 增强 TETRIS 屏幕震动 - 持续震动
+            self.shake_offset = [random.randint(-12, 12), random.randint(-12, 12)]
+
+            # 触发慢动作
+            self.slow_motion_timer = 0.5  # 0.5秒慢动作
+            self.slow_motion_factor = 0.3  # 30% 速度
+
+            # 额外金色粒子爆发
+            for _ in range(80):
+                self.particles.append(Particle(
+                    BOARD_X + BOARD_WIDTH // 2, y_pos,
+                    (255, 215, 0), 4  # 金色粒子
+                ))
+
         if lines_cleared == 4:
             text = f"TETRIS! +{line_score}"
             self.floating_texts.append(FloatingText(BOARD_X + BOARD_WIDTH // 2, y_pos, text, (255, 255, 255), 20, True, 0))
         else:
             self.floating_texts.append(FloatingText(BOARD_X + BOARD_WIDTH // 2, y_pos, f"+{line_score}", (255, 255, 255), 16, False, 0))
-        
+
         if self.combo > 1:
             combo_text = f"COMBO x{self.combo}! +{combo_bonus}"
             self.floating_texts.append(FloatingText(BOARD_X + BOARD_WIDTH // 2, y_pos + 40, combo_text, (255, 200, 0), 16, False, self.combo))
-        
+
         new_level = self.lines // 10 + 1
         if new_level > self.level:
             self.level = new_level
@@ -919,7 +1068,7 @@ class Game:
                 flash_surf = pygame.Surface((BOARD_WIDTH, GRID_SIZE), pygame.SRCALPHA)
                 pygame.draw.rect(flash_surf, (255, 255, 255, flash_alpha), (0, 0, BOARD_WIDTH, GRID_SIZE))
                 self.screen.blit(flash_surf, (BOARD_X + self.shake_offset[0], BOARD_Y + (y - 2) * GRID_SIZE + self.shake_offset[1]))
-        
+
         for fe in self.flash_effects:
             row, color, alpha, n = fe
             fs = pygame.Surface((BOARD_WIDTH, GRID_SIZE), pygame.SRCALPHA)
@@ -930,13 +1079,13 @@ class Game:
                 gs = pygame.Surface((BOARD_WIDTH, GRID_SIZE * n + expand * 2), pygame.SRCALPHA)
                 gs.fill((*color, min(80, alpha // 2)))
                 self.screen.blit(gs, (BOARD_X + self.shake_offset[0], BOARD_Y + row * GRID_SIZE - expand + self.shake_offset[1]))
-        
+
         for sl in self.scan_lines:
             y_pos, color, alpha = sl
             ss = pygame.Surface((BOARD_WIDTH, 3), pygame.SRCALPHA)
             ss.fill((*color, min(255, alpha * 2)))
             self.screen.blit(ss, (BOARD_X + self.shake_offset[0], BOARD_Y + y_pos + self.shake_offset[1]))
-        
+
         if self.level_up_effect > 0:
             intensity = self.level_up_effect / 45
             shake_magnitude = int(10 * intensity)
@@ -981,11 +1130,11 @@ class Game:
             if particle.life <= 0:
                 self.particles.remove(particle)
     
-    def draw_floating_texts(self):
+    def draw_floating_texts(self, dt: float = 0.016):
         for text in self.floating_texts[:]:
-            text.update()
+            text.update(dt)
             text.draw(self.screen, self.font_medium, self.font_name)
-            if text.life <= 0:
+            if text.alpha <= 0:
                 self.floating_texts.remove(text)
     
     def draw_start_screen(self):
@@ -1112,19 +1261,27 @@ class Game:
         self.screen.blit(restart_text, ((SCREEN_WIDTH - restart_text.get_width()) // 2, int(SCREEN_HEIGHT / 3) + 140))
     
     def update(self, dt: float):
-        self.time += dt
-        
+        # 应用慢动作
+        if self.slow_motion_timer > 0:
+            self.slow_motion_timer -= dt
+            actual_dt = dt * self.slow_motion_factor
+        else:
+            actual_dt = dt
+            self.slow_motion_factor = 1.0
+
+        self.time += actual_dt
+
         if self.clear_flash_timer > 0:
             self.clear_flash_timer -= 1
-        
+
         for fe in self.flash_effects:
             fe[2] -= 10
         self.flash_effects = [fe for fe in self.flash_effects if fe[2] > 0]
-        
+
         for sl in self.scan_lines:
             sl[2] -= 8
         self.scan_lines = [sl for sl in self.scan_lines if sl[2] > 0]
-        
+
         if self.level_up_effect > 0:
             self.level_up_effect -= 1
         if self.rainbow_effect > 0:
@@ -1134,11 +1291,24 @@ class Game:
         if self.combo_shake > 0:
             self.combo_shake -= 1
 
+        # 更新 TETRIS 特效
+        for effect in self.tetris_effects[:]:
+            if not effect.update(actual_dt):
+                self.tetris_effects.remove(effect)
+
+        # TETRIS 震动持续效果
+        if self.slow_motion_timer > 0:
+            shake_intensity = self.slow_motion_timer * 24
+            self.shake_offset = [
+                random.randint(-int(shake_intensity), int(shake_intensity)),
+                random.randint(-int(shake_intensity), int(shake_intensity))
+            ]
+
         # 更新升级特效
         self.update_level_up_effects()
 
         if self.state == "playing":
-            self.fall_timer += dt
+            self.fall_timer += actual_dt
             if self.fall_timer >= self.fall_speed:
                 self.fall_timer = 0
                 if not self.move_piece(0, 1):
@@ -1241,7 +1411,7 @@ class Game:
                 self.draw_effects()
                 self.draw_trails()
                 self.draw_particles()
-                self.draw_floating_texts()
+                self.draw_floating_texts(dt)
                 self.draw_level_up_effects()  # 升级特效绘制在最上层
             elif self.state == "paused":
                 self.draw_background()
