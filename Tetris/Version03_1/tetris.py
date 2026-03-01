@@ -491,6 +491,7 @@ class Game:
         self.shockwaves: List[dict] = []  # 冲击波
         self.edge_pulse = 0  # 边缘脉冲
         self.block_flash = 0  # 方块闪光
+        self.level_up_pause = False  # 升级暂停标志
 
         # TETRIS 特效
         self.tetris_effects: List[TetrisEffect] = []
@@ -555,6 +556,7 @@ class Game:
         self.tetris_effects = []
         self.slow_motion_timer = 0
         self.slow_motion_factor = 1.0
+        self.level_up_pause = False
 
     def new_piece(self) -> Tetromino:
         return Tetromino(random.choice(list(SHAPES.keys())))
@@ -733,6 +735,9 @@ class Game:
             self.shake_offset = [random.randint(-10, 10), random.randint(-10, 10)]
             self.fall_speed = max(0.08, 1.0 - (self.level - 1) * 0.08)
 
+            # 升级暂停：暂停方块下落，等待特效播放完成
+            self.level_up_pause = True
+
             # 触发升级特效，传入方块位置
             self.trigger_level_up_effects(y_pos)
 
@@ -778,6 +783,10 @@ class Game:
         # 更新边缘脉冲
         if self.edge_pulse > 0:
             self.edge_pulse -= 1.0 / 45
+        else:
+            # 边缘脉冲结束，解除升级暂停
+            if self.level_up_pause:
+                self.level_up_pause = False
 
         # 更新方块闪光
         if self.block_flash > 0:
@@ -1308,11 +1317,19 @@ class Game:
         self.update_level_up_effects()
 
         if self.state == "playing":
-            self.fall_timer += actual_dt
-            if self.fall_timer >= self.fall_speed:
-                self.fall_timer = 0
-                if not self.move_piece(0, 1):
-                    self.lock_piece()
+            # 升级特效期间使用最慢速度（第一关速度）
+            if self.level_up_pause:
+                self.fall_timer += actual_dt
+                if self.fall_timer >= 1.0:  # 第一关速度
+                    self.fall_timer = 0
+                    if not self.move_piece(0, 1):
+                        self.lock_piece()
+            else:
+                self.fall_timer += actual_dt
+                if self.fall_timer >= self.fall_speed:
+                    self.fall_timer = 0
+                    if not self.move_piece(0, 1):
+                        self.lock_piece()
     
     def handle_input(self, event: pygame.event.Event):
         if event.type == pygame.KEYDOWN:
