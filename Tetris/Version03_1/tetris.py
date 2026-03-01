@@ -63,6 +63,9 @@ SHAPES = {
 }
 
 class Particle:
+    # 类级别的 Surface 缓存
+    _glow_cache = {}  # 缓存光晕 Surface
+
     def __init__(self, x: float, y: float, color: Tuple[int, int, int], lines_cleared: int = 1):
         self.x = x
         self.y = y
@@ -102,24 +105,49 @@ class Particle:
         if self.life <= 0:
             return
         trail_len = len(self.trail)
-        alpha_multiplier = 1.5 + self.alpha_bonus  # 调高20%透明度
-        for i, (tx, ty, tc, tl) in enumerate(self.trail):
-            progress = (i + 1) / trail_len
-            trail_alpha = min(255, int(100 * alpha_multiplier * tl * progress * 0.6))  # 调高20%
-            trail_size = max(1, int(self.size * progress * 0.7))
-            trail_surf = pygame.Surface((trail_size * 2 + 4, trail_size * 2 + 4), pygame.SRCALPHA)
-            pygame.draw.circle(trail_surf, (*tc, trail_alpha), (trail_size + 2, trail_size + 2), trail_size)
-            surface.blit(trail_surf, (int(tx - trail_size - 2), int(ty - trail_size - 2)))
+        alpha_multiplier = 1.5 + self.alpha_bonus
 
-        alpha = min(255, int(240 * alpha_multiplier * self.life))  # 调高20%并限制最大值
+        # 简化拖尾绘制 - 只在必要时创建 Surface
+        if trail_len > 0:
+            for i, (tx, ty, tc, tl) in enumerate(self.trail):
+                progress = (i + 1) / trail_len
+                trail_alpha = min(255, int(100 * alpha_multiplier * tl * progress * 0.6))
+                trail_size = max(1, int(self.size * progress * 0.7))
+                # 使用缓存的 key
+                cache_key = (trail_size, tc, trail_alpha)
+                if cache_key not in Particle._glow_cache:
+                    trail_surf = pygame.Surface((trail_size * 2 + 4, trail_size * 2 + 4), pygame.SRCALPHA)
+                    pygame.draw.circle(trail_surf, (*tc, trail_alpha), (trail_size + 2, trail_size + 2), trail_size)
+                    Particle._glow_cache[cache_key] = trail_surf
+                    # 限制缓存大小
+                    if len(Particle._glow_cache) > 200:
+                        # 清除一半缓存
+                        keys = list(Particle._glow_cache.keys())[:100]
+                        for k in keys:
+                            del Particle._glow_cache[k]
+                trail_surf = Particle._glow_cache[cache_key]
+                surface.blit(trail_surf, (int(tx - trail_size - 2), int(ty - trail_size - 2)))
+
+        alpha = min(255, int(240 * alpha_multiplier * self.life))
         size = max(1, int(self.size * self.life))
 
-        glow_surf = pygame.Surface((size * 4 + 4, size * 4 + 4), pygame.SRCALPHA)
+        # 缓存主粒子光晕
+        cache_key = (size, self.color, alpha)
+        if cache_key not in Particle._glow_cache:
+            glow_surf = pygame.Surface((size * 4 + 4, size * 4 + 4), pygame.SRCALPHA)
+            center = size * 2 + 2
+            # 简化光晕层数
+            for i in range(size + 2, size, -1):
+                g_alpha = min(255, int(alpha * 0.15 * (1 - (i - size) / 2)))
+                pygame.draw.circle(glow_surf, (*self.color, g_alpha), (center, center), i)
+            pygame.draw.circle(glow_surf, (*self.color, min(255, int(alpha * 0.7))), (center, center), size)
+            Particle._glow_cache[cache_key] = glow_surf
+            if len(Particle._glow_cache) > 200:
+                keys = list(Particle._glow_cache.keys())[:100]
+                for k in keys:
+                    del Particle._glow_cache[k]
+        glow_surf = Particle._glow_cache[cache_key]
         center = size * 2 + 2
-        for i in range(size + 3, size, -1):
-            g_alpha = min(255, int(alpha * 0.15 * (1 - (i - size) / 3)))
-            pygame.draw.circle(glow_surf, (*self.color, g_alpha), (center, center), i)
-        pygame.draw.circle(glow_surf, (*self.color, min(255, int(alpha * 0.7))), (center, center), size)
         surface.blit(glow_surf, (int(self.x - center), int(self.y - center)))
 
 class FloatingText:
@@ -681,8 +709,8 @@ class Game:
             self.slow_motion_timer = 0.5  # 0.5秒慢动作
             self.slow_motion_factor = 0.3  # 30% 速度
 
-            # 额外金色粒子爆发
-            for _ in range(80):
+            # 额外金色粒子爆发 - 减少数量
+            for _ in range(40):
                 self.particles.append(Particle(
                     BOARD_X + BOARD_WIDTH // 2, y_pos,
                     (255, 215, 0), 4  # 金色粒子
@@ -731,15 +759,15 @@ class Game:
         ))
 
     def spawn_level_up_particles(self, cx: int, cy: int):
-        """生成升级粒子"""
-        # 中心爆发
-        for _ in range(60):
+        """生成升级粒子 - 优化版本：减少数量但保持视觉效果"""
+        # 中心爆发 - 减少到30个
+        for _ in range(30):
             self.particles.append(Particle(cx, cy, (255, 215, 0), 4))
 
-        # 四角爆发
+        # 四角爆发 - 减少到每角10个
         corners = [(0, 0), (SCREEN_WIDTH, 0), (0, SCREEN_HEIGHT), (SCREEN_WIDTH, SCREEN_HEIGHT)]
         for corner_x, corner_y in corners:
-            for _ in range(25):
+            for _ in range(10):
                 self.particles.append(Particle(corner_x, corner_y, (255, 200, 50), 4))
 
     def update_level_up_effects(self):
@@ -762,66 +790,50 @@ class Game:
             self.draw_edge_glow()
 
     def draw_edge_glow(self):
-        """绘制边缘光晕效果"""
+        """绘制边缘光晕效果 - 优化版本"""
         edge_alpha = int(200 * self.edge_pulse)
-        t = self.time
 
-        # 金色系的渐变颜色
-        def gold_gradient(pos, total):
-            progress = pos / total
-            if progress < 0.3:
-                return (255, 215, 0)  # 金色
-            elif progress < 0.6:
-                return (255, 200, 100)  # 浅金
+        # 简化的金色渐变
+        def gold_color(progress):
+            if progress < 0.5:
+                return (255, 215, 0)
             else:
-                return (255, 240, 200)  # 白金色
+                return (255, 230, 150)
 
-        edge_height = 50
+        edge_height = 40
 
-        # 上边缘 - 从上向下渐变
+        # 上边缘 - 使用渐变矩形代替逐像素绘制
         edge_surf = pygame.Surface((SCREEN_WIDTH, edge_height), pygame.SRCALPHA)
         for y in range(edge_height):
             alpha = int(edge_alpha * (1 - y / edge_height) ** 1.5)
-            for x in range(0, SCREEN_WIDTH, 4):
-                wave = math.sin(t * 2 + x * 0.02) * 0.3 + 0.7
-                color = gold_gradient(x, SCREEN_WIDTH)
-                final_alpha = int(alpha * wave)
-                pygame.draw.line(edge_surf, (*color, final_alpha), (x, y), (x + 4, y))
+            color = gold_color(y / edge_height)
+            pygame.draw.line(edge_surf, (*color, alpha), (0, y), (SCREEN_WIDTH, y))
         self.screen.blit(edge_surf, (0, 0))
 
-        # 下边缘 - 从下向上渐变
+        # 下边缘
         edge_surf = pygame.Surface((SCREEN_WIDTH, edge_height), pygame.SRCALPHA)
         for y in range(edge_height):
-            alpha = int(edge_alpha * (y / edge_height) ** 1.5)  # 反转渐变方向
-            for x in range(0, SCREEN_WIDTH, 4):
-                wave = math.sin(t * 2 + x * 0.02) * 0.3 + 0.7
-                color = gold_gradient(x, SCREEN_WIDTH)
-                final_alpha = int(alpha * wave)
-                pygame.draw.line(edge_surf, (*color, final_alpha), (x, y), (x + 4, y))
+            alpha = int(edge_alpha * (y / edge_height) ** 1.5)
+            color = gold_color(y / edge_height)
+            pygame.draw.line(edge_surf, (*color, alpha), (0, y), (SCREEN_WIDTH, y))
         self.screen.blit(edge_surf, (0, SCREEN_HEIGHT - edge_height))
 
-        edge_width = 50
+        edge_width = 40
 
-        # 左边缘 - 从左向右渐变
+        # 左边缘
         edge_surf = pygame.Surface((edge_width, SCREEN_HEIGHT), pygame.SRCALPHA)
         for x in range(edge_width):
             alpha = int(edge_alpha * (1 - x / edge_width) ** 1.5)
-            for y in range(0, SCREEN_HEIGHT, 4):
-                wave = math.sin(t * 2 + y * 0.02) * 0.3 + 0.7
-                color = gold_gradient(y, SCREEN_HEIGHT)
-                final_alpha = int(alpha * wave)
-                pygame.draw.line(edge_surf, (*color, final_alpha), (x, y), (x, y + 4))
+            color = gold_color(x / edge_width)
+            pygame.draw.line(edge_surf, (*color, alpha), (x, 0), (x, SCREEN_HEIGHT))
         self.screen.blit(edge_surf, (0, 0))
 
-        # 右边缘 - 从右向左渐变
+        # 右边缘
         edge_surf = pygame.Surface((edge_width, SCREEN_HEIGHT), pygame.SRCALPHA)
         for x in range(edge_width):
-            alpha = int(edge_alpha * (x / edge_width) ** 1.5)  # 反转渐变方向
-            for y in range(0, SCREEN_HEIGHT, 4):
-                wave = math.sin(t * 2 + y * 0.02) * 0.3 + 0.7
-                color = gold_gradient(y, SCREEN_HEIGHT)
-                final_alpha = int(alpha * wave)
-                pygame.draw.line(edge_surf, (*color, final_alpha), (x, y), (x, y + 4))
+            alpha = int(edge_alpha * (x / edge_width) ** 1.5)
+            color = gold_color(x / edge_width)
+            pygame.draw.line(edge_surf, (*color, alpha), (x, 0), (x, SCREEN_HEIGHT))
         self.screen.blit(edge_surf, (SCREEN_WIDTH - edge_width, 0))
 
     def draw_neon_text(self, surface: pygame.Surface, text: str, font: pygame.font.Font,
@@ -882,15 +894,7 @@ class Game:
 
         # 升级闪光效果 - 更强烈的金色闪光
         if self.block_flash > 0:
-            flash_intensity = self.block_flash ** 0.7  # 更持久的闪光感
-            # 金色到白色的闪光
-            t = self.time
-            flash_wave = 0.5 + 0.5 * math.sin(t * 8)  # 快速闪烁
-            # 金色闪光 (255, 215, 0) -> 白色 (255, 255, 255)
-            flash_r = 255
-            flash_g = int(215 + 40 * flash_wave)
-            flash_b = int(100 * flash_wave)
-            # 更强的混合效果
+            flash_intensity = self.block_flash ** 0.7
             r = min(255, int(r + (255 - r) * flash_intensity * 0.8))
             g = min(255, int(g + (255 - g) * flash_intensity * 0.7))
             b = min(255, int(b + (255 - b) * flash_intensity * 0.5))
@@ -899,37 +903,33 @@ class Game:
             r = min(255, int(r * breath))
             g = min(255, int(g * breath))
             b = min(255, int(b * breath))
-        
-        glow_surf = pygame.Surface((size + 20, size + 20), pygame.SRCALPHA)
-        for i in range(10, 0, -2):
-            alpha = int(25 * (1 - i / 10))
-            pygame.draw.rect(glow_surf, (r, g, b, alpha), (10 - i, 10 - i, size + i * 2, size + i * 2), border_radius=5)
-        surface.blit(glow_surf, (x - 10, y - 10))
-        
+
+        # 简化光晕绘制 - 减少层数
+        glow_surf = pygame.Surface((size + 16, size + 16), pygame.SRCALPHA)
+        for i in range(8, 0, -2):  # 减少层数从10到8
+            alpha = int(25 * (1 - i / 8))
+            pygame.draw.rect(glow_surf, (r, g, b, alpha), (8 - i, 8 - i, size + i * 2, size + i * 2), border_radius=5)
+        surface.blit(glow_surf, (x - 8, y - 8))
+
         block_surf = pygame.Surface((size, size), pygame.SRCALPHA)
-        
+
         pygame.draw.rect(block_surf, (r // 4, g // 4, b // 4, 200), (0, 0, size, size), border_radius=4)
-        
+
         inner_margin = 3
         inner_size = size - inner_margin * 2
         pygame.draw.rect(block_surf, (r, g, b, 60), (inner_margin, inner_margin, inner_size, inner_size), border_radius=3)
-        
-        glass_highlight = pygame.Surface((inner_size - 4, inner_size // 3), pygame.SRCALPHA)
+
+        # 简化玻璃高光效果
         for i in range(inner_size // 3):
             alpha = int(80 * (1 - i / (inner_size // 3)))
-            pygame.draw.line(glass_highlight, (255, 255, 255, alpha), (0, i), (inner_size - 4, i))
-        block_surf.blit(glass_highlight, (inner_margin + 2, inner_margin + 2))
-        
+            pygame.draw.line(block_surf, (255, 255, 255, alpha), (inner_margin + 2, inner_margin + 2 + i), (inner_size + inner_margin - 2, inner_margin + 2 + i))
+
         pygame.draw.rect(block_surf, (255, 255, 255, 40), (inner_margin + 2, inner_margin + 2, 3, inner_size - 4), border_radius=2)
-        
         pygame.draw.rect(block_surf, (0, 0, 0, 60), (size - inner_margin - 5, inner_margin + 2, 3, inner_size - 4), border_radius=2)
-        
         pygame.draw.rect(block_surf, (0, 0, 0, 40), (inner_margin + 2, size - inner_margin - 4, inner_size - 4, 3), border_radius=2)
-        
         pygame.draw.rect(block_surf, (r, g, b, 200), (0, 0, size, size), 2, border_radius=4)
-        
         pygame.draw.rect(block_surf, (min(255, r + 50), min(255, g + 50), min(255, b + 50), 150), (1, 1, size - 2, size - 2), 1, border_radius=3)
-        
+
         surface.blit(block_surf, (x, y))
     
     def draw_ghost_block(self, surface: pygame.Surface, x: int, y: int, color: Tuple[int, int, int]):
