@@ -292,11 +292,17 @@ class Game:
                 self.font_medium = pygame.font.SysFont(self.font_name, 32)
                 self.font_small = pygame.font.SysFont(self.font_name, 16)
                 self.font_tiny = pygame.font.SysFont(self.font_name, 14)
+                # 加粗字体用于标题
+                self.font_title_large = pygame.font.SysFont(self.font_name, 48, bold=True)
+                self.font_title_medium = pygame.font.SysFont(self.font_name, 32, bold=True)
             else:
                 self.font_large = pygame.font.Font(None, 48)
                 self.font_medium = pygame.font.Font(None, 32)
                 self.font_small = pygame.font.Font(None, 20)
                 self.font_tiny = pygame.font.Font(None, 16)
+                # 加粗字体用于标题
+                self.font_title_large = pygame.font.Font(None, 48, bold=True)
+                self.font_title_medium = pygame.font.Font(None, 32, bold=True)
         except:
             self.font_large = pygame.font.Font(None, 48)
             self.font_medium = pygame.font.Font(None, 32)
@@ -408,8 +414,13 @@ class Game:
             self.current_piece.x += dx
             self.current_piece.y += dy
             if dy > 0:
+                # 对于同一列的方块，只保留最下面的那个的拖影，避免垂直重叠
+                columns = {}
                 for x, y in self.current_piece.get_blocks():
-                    self.trail_positions.append((BOARD_X + x * GRID_SIZE + GRID_SIZE // 2, 
+                    if x not in columns or y > columns[x]:
+                        columns[x] = y
+                for x, y in columns.items():
+                    self.trail_positions.append((BOARD_X + x * GRID_SIZE + GRID_SIZE // 2,
                                                   BOARD_Y + (y - 2) * GRID_SIZE + GRID_SIZE // 2,
                                                   self.current_piece.color, 1.0))
             return True
@@ -432,7 +443,6 @@ class Game:
         drop_distance = 0
         while self.move_piece(0, 1):
             drop_distance += 1
-        self.score += drop_distance * 2
         self.lock_piece()
     
     def get_ghost_position(self) -> List[Tuple[int, int]]:
@@ -538,7 +548,7 @@ class Game:
             self.shake_offset = [random.randint(-10, 10), random.randint(-10, 10)]
             self.fall_speed = max(0.08, 1.0 - (self.level - 1) * 0.08)
     
-    def draw_neon_text(self, surface: pygame.Surface, text: str, font: pygame.font.Font, 
+    def draw_neon_text(self, surface: pygame.Surface, text: str, font: pygame.font.Font,
                         x: int, y: int, color: Tuple[int, int, int], glow_size: int = 2, pulse: bool = False):
         for radius, base_a in [(4, 25), (2, 50)]:
             gs = font.render(text, True, color)
@@ -547,13 +557,46 @@ class Game:
                 for dy in range(-radius, radius + 1, max(1, radius // 2)):
                     if dx != 0 or dy != 0:
                         surface.blit(gs, (x + dx, y + dy))
-        
+
         ec = tuple(min(255, c + 100) for c in color)
         es = font.render(text, True, ec)
         es.set_alpha(180)
         for dx, dy in [(-1,0),(1,0),(0,-1),(0,1)]:
             surface.blit(es, (x + dx, y + dy))
-        
+
+        s = font.render(text, True, color)
+        surface.blit(s, (x, y))
+
+    def draw_rainbow_title(self, surface: pygame.Surface, text: str, font: pygame.font.Font, x: int, y: int):
+        """绘制霓虹灯效果的标题 - 参考 Version01"""
+        # 彩虹颜色 - 与 Version01 相同的算法
+        t = self.time
+        def rainbow_color(offset=0):
+            return (
+                int(127 + 127 * math.sin(t * 0.8 + offset)),
+                int(127 + 127 * math.sin(t * 0.8 + offset + 2.094)),
+                int(127 + 127 * math.sin(t * 0.8 + offset + 4.189)),
+            )
+
+        color = rainbow_color()
+
+        # 中等边缘光晕 (无呼吸/闪烁)
+        for radius, base_a in [(4, 25), (2, 50)]:
+            gs = font.render(text, True, color)
+            gs.set_alpha(base_a)
+            for dx in range(-radius, radius + 1, max(1, radius // 2)):
+                for dy in range(-radius, radius + 1, max(1, radius // 2)):
+                    if dx != 0 or dy != 0:
+                        surface.blit(gs, (x + dx, y + dy))
+
+        # 边缘高亮 (明亮轮廓)
+        ec = tuple(min(255, c + 100) for c in color)
+        es = font.render(text, True, ec)
+        es.set_alpha(180)
+        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            surface.blit(es, (x + dx, y + dy))
+
+        # 核心
         s = font.render(text, True, color)
         surface.blit(s, (x, y))
     
@@ -684,15 +727,15 @@ class Game:
         self.screen.blit(panel_surf, (PANEL_X, BOARD_Y))
         
         title_text = "TETRIS"
-        title_x = PANEL_X + (PANEL_WIDTH - self.font_large.size(title_text)[0]) // 2
-        self.draw_neon_text(self.screen, title_text, self.font_large, title_x, BOARD_Y + 10, (0, 255, 255), 4, True)
+        title_x = PANEL_X + (PANEL_WIDTH - self.font_medium.size(title_text)[0]) // 2
+        self.draw_rainbow_title(self.screen, title_text, self.font_title_medium, title_x, BOARD_Y + 40)
         
         labels = [
             ("下一个", BOARD_Y + 120),
             ("最高分", BOARD_Y + 240),
-            ("得分", BOARD_Y + 300),
-            ("消行", BOARD_Y + 370),
-            ("关卡", BOARD_Y + 440),
+            ("得分", BOARD_Y + 330),
+            ("消行", BOARD_Y + 400),
+            ("关卡", BOARD_Y + 470),
         ]
         
         for label, y in labels:
@@ -702,18 +745,18 @@ class Game:
         self.screen.blit(best_text, (PANEL_X + 20, BOARD_Y + 260))
         
         score_text = self.font_small.render(str(self.score), True, (255, 255, 255))
-        self.screen.blit(score_text, (PANEL_X + 20, BOARD_Y + 320))
+        self.screen.blit(score_text, (PANEL_X + 20, BOARD_Y + 350))
         
         lines_text = self.font_small.render(str(self.lines), True, (255, 255, 255))
-        self.screen.blit(lines_text, (PANEL_X + 20, BOARD_Y + 390))
+        self.screen.blit(lines_text, (PANEL_X + 20, BOARD_Y + 420))
         
         level_text = self.font_small.render(str(self.level), True, (255, 255, 255))
         if self.level_up_effect > 0:
             scale = 1.0 + 0.3 * math.sin(self.time * 20)
             scaled = pygame.transform.scale(level_text, (int(level_text.get_width() * scale), int(level_text.get_height() * scale)))
-            self.screen.blit(scaled, (PANEL_X + 20, BOARD_Y + 460))
+            self.screen.blit(scaled, (PANEL_X + 20, BOARD_Y + 490))
         else:
-            self.screen.blit(level_text, (PANEL_X + 20, BOARD_Y + 460))
+            self.screen.blit(level_text, (PANEL_X + 20, BOARD_Y + 490))
         
         help_text = self.font_tiny.render("H - 帮助", True, (100, 100, 120))
         self.screen.blit(help_text, (PANEL_X + 20, BOARD_Y + BOARD_HEIGHT - 30))
@@ -769,9 +812,18 @@ class Game:
     
     def draw_trails(self):
         new_trails = []
-        for x, y, color, life in self.trail_positions:
+        total_trails = len(self.trail_positions)
+        for idx, (x, y, color, life) in enumerate(self.trail_positions):
             if life > 0:
-                alpha = int(50 * life)
+                # 计算透明度渐变：最早的拖影透明度约10%，最新的较不透明
+                # idx=0 是最早的，idx=total_trails-1 是最新的
+                if total_trails > 1:
+                    # 从10%渐变到80%
+                    gradient_factor = 0.1 + 0.7 * (idx / (total_trails - 1))
+                else:
+                    gradient_factor = 0.5
+                alpha = int(255 * gradient_factor * life)
+
                 trail_surf = pygame.Surface((GRID_SIZE, GRID_SIZE), pygame.SRCALPHA)
                 pygame.draw.rect(trail_surf, (*color, alpha), (0, 0, GRID_SIZE, GRID_SIZE), border_radius=3)
                 self.screen.blit(trail_surf, (int(x - GRID_SIZE // 2), int(y - GRID_SIZE // 2)))
@@ -801,10 +853,7 @@ class Game:
         
         title_text = "TETRIS"
         title_x = (SCREEN_WIDTH - self.font_large.size(title_text)[0]) // 2
-        self.draw_neon_text(self.screen, title_text, self.font_large, title_x, 150, (0, 255, 255), 4, True)
-        
-        subtitle = self.font_medium.render("霓虹版", True, (255, 100, 255))
-        self.screen.blit(subtitle, ((SCREEN_WIDTH - subtitle.get_width()) // 2, 210))
+        self.draw_rainbow_title(self.screen, title_text, self.font_title_large, title_x, 150)
         
         instructions = [
             "← → : 移动",
@@ -829,7 +878,7 @@ class Game:
         overlay.fill((0, 0, 0, 180))
         self.screen.blit(overlay, (0, 0))
         
-        self.draw_neon_text(self.screen, "暂停", self.font_large, (SCREEN_WIDTH - 70) // 2, SCREEN_HEIGHT // 2 - 50, (255, 255, 0), 4, True)
+        self.draw_rainbow_title(self.screen, "暂停", self.font_title_large, (SCREEN_WIDTH - 70) // 2, SCREEN_HEIGHT // 2 - 50)
         
         resume_text = self.font_medium.render("按 P 继续", True, (200, 200, 220))
         self.screen.blit(resume_text, ((SCREEN_WIDTH - resume_text.get_width()) // 2, SCREEN_HEIGHT // 2 + 20))
@@ -841,7 +890,7 @@ class Game:
         overlay.fill((0, 0, 0, 200))
         self.screen.blit(overlay, (0, 0))
         
-        self.draw_neon_text(self.screen, "帮助", self.font_large, (SCREEN_WIDTH - 70) // 2, 30, (0, 255, 255), 3, True)
+        self.draw_rainbow_title(self.screen, "帮助", self.font_title_medium, (SCREEN_WIDTH - 70) // 2, 30)
         
         help_sections = [
             ("操作", [
@@ -869,12 +918,12 @@ class Game:
         
         if self.font_name:
             title_font = pygame.font.SysFont(self.font_name, 17, bold=True)
-            content_font = pygame.font.SysFont(self.font_name, 17)
+            content_font = pygame.font.SysFont(self.font_name, 15)
         else:
-            title_font = pygame.font.Font(None, 21)
-            content_font = pygame.font.Font(None, 21)
-        
-        y = 85
+            title_font = pygame.font.Font(None, 20)
+            content_font = pygame.font.Font(None, 18)
+
+        y = 100
         for section_title, lines in help_sections:
             title_surf = title_font.render(section_title, True, (255, 200, 0))
             self.screen.blit(title_surf, (50, y))
@@ -900,19 +949,23 @@ class Game:
         self.screen.blit(overlay, (0, 0))
         
         title_text = "游戏结束"
-        title_surf = self.font_large.render(title_text, True, (255, 50, 50))
-        title_x = (SCREEN_WIDTH - title_surf.get_width()) // 2
-        self.draw_neon_text(self.screen, title_text, self.font_large, title_x, 250, (255, 50, 50), 3, True)
-        
-        score_text = self.font_small.render(f"得分: {self.score}", True, (255, 255, 255))
-        self.screen.blit(score_text, ((SCREEN_WIDTH - score_text.get_width()) // 2, 320))
+        title_x = (SCREEN_WIDTH - self.font_title_large.size(title_text)[0]) // 2
+        self.draw_rainbow_title(self.screen, title_text, self.font_title_large, title_x, int(SCREEN_HEIGHT / 4))
+
+        # 得分字体加粗
+        if self.font_name:
+            score_font = pygame.font.SysFont(self.font_name, 20, bold=True)
+        else:
+            score_font = pygame.font.Font(None, 24, bold=True)
+        score_text = score_font.render(f"得分: {self.score}", True, (255, 255, 255))
+        self.screen.blit(score_text, ((SCREEN_WIDTH - score_text.get_width()) // 2, int(SCREEN_HEIGHT / 3) + 70))
         
         if self.score >= self.high_score:
             best_text = self.font_small.render("新纪录!", True, (255, 200, 0))
-            self.screen.blit(best_text, ((SCREEN_WIDTH - best_text.get_width()) // 2, 350))
-        
+            self.screen.blit(best_text, ((SCREEN_WIDTH - best_text.get_width()) // 2, int(SCREEN_HEIGHT / 3) + 100))
+
         restart_text = self.font_tiny.render("按 R 重新开始", True, (150, 150, 180))
-        self.screen.blit(restart_text, ((SCREEN_WIDTH - restart_text.get_width()) // 2, 400))
+        self.screen.blit(restart_text, ((SCREEN_WIDTH - restart_text.get_width()) // 2, int(SCREEN_HEIGHT / 3) + 140))
     
     def update(self, dt: float):
         self.time += dt
@@ -968,8 +1021,7 @@ class Game:
                     self.move_piece(1, 0)
                     self.key_repeat_timers[pygame.K_RIGHT] = self.key_repeat_delay
                 elif event.key == pygame.K_DOWN:
-                    if self.move_piece(0, 1):
-                        self.score += 1
+                    self.move_piece(0, 1)
                     self.key_repeat_timers[pygame.K_DOWN] = self.key_repeat_delay
                 elif event.key == pygame.K_UP:
                     self.rotate_piece()
@@ -1006,8 +1058,7 @@ class Game:
                         elif key == pygame.K_RIGHT:
                             self.move_piece(1, 0)
                         elif key == pygame.K_DOWN:
-                            if self.move_piece(0, 1):
-                                self.score += 1
+                            self.move_piece(0, 1)
     
     def run(self):
         running = True
