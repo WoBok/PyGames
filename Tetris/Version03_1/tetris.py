@@ -330,7 +330,12 @@ class Game:
         self.combo_shake = 0
         self.flash_effects: List[List] = []
         self.scan_lines: List[List] = []
-        
+
+        # 升级特效
+        self.shockwaves: List[dict] = []  # 冲击波
+        self.edge_pulse = 0  # 边缘脉冲
+        self.block_flash = 0  # 方块闪光
+
         self.state = "start"
         self.previous_state = "start"
         self.time = 0
@@ -383,7 +388,10 @@ class Game:
         self.combo_shake = 0
         self.flash_effects = []
         self.scan_lines = []
-    
+        self.shockwaves = []
+        self.edge_pulse = 0
+        self.block_flash = 0
+
     def new_piece(self) -> Tetromino:
         return Tetromino(random.choice(list(SHAPES.keys())))
     
@@ -547,7 +555,126 @@ class Game:
             self.level_up_effect = 45
             self.shake_offset = [random.randint(-10, 10), random.randint(-10, 10)]
             self.fall_speed = max(0.08, 1.0 - (self.level - 1) * 0.08)
-    
+
+            # 触发升级特效，传入方块位置
+            self.trigger_level_up_effects(y_pos)
+
+    def trigger_level_up_effects(self, block_y: float = None):
+        """触发升级特效"""
+        # 使用方块落下位置作为中心
+        if block_y is None:
+            block_y = BOARD_Y + BOARD_HEIGHT // 2
+        center_x = BOARD_X + BOARD_WIDTH // 2
+        center_y = block_y
+
+        # 边缘脉冲
+        self.edge_pulse = 1.0
+
+        # 方块闪光
+        self.block_flash = 1.0
+
+        # 粒子爆发
+        self.spawn_level_up_particles(center_x, center_y)
+
+        # Level Up 浮动文字 - 金色
+        self.floating_texts.append(FloatingText(
+            center_x, center_y - 50, "LEVEL UP!", (255, 215, 0), 32, True, 0
+        ))
+
+    def spawn_level_up_particles(self, cx: int, cy: int):
+        """生成升级粒子"""
+        # 中心爆发
+        for _ in range(60):
+            self.particles.append(Particle(cx, cy, (255, 215, 0), 4))
+
+        # 四角爆发
+        corners = [(0, 0), (SCREEN_WIDTH, 0), (0, SCREEN_HEIGHT), (SCREEN_WIDTH, SCREEN_HEIGHT)]
+        for corner_x, corner_y in corners:
+            for _ in range(25):
+                self.particles.append(Particle(corner_x, corner_y, (255, 200, 50), 4))
+
+    def update_level_up_effects(self):
+        """更新升级特效"""
+        # 清理冲击波（如果有残留）
+        self.shockwaves.clear()
+
+        # 更新边缘脉冲
+        if self.edge_pulse > 0:
+            self.edge_pulse -= 1.0 / 45
+
+        # 更新方块闪光
+        if self.block_flash > 0:
+            self.block_flash -= 1.0 / 45
+
+    def draw_level_up_effects(self):
+        """绘制升级特效"""
+        # 绘制边缘光晕
+        if self.edge_pulse > 0:
+            self.draw_edge_glow()
+
+    def draw_edge_glow(self):
+        """绘制边缘光晕效果"""
+        edge_alpha = int(200 * self.edge_pulse)
+        t = self.time
+
+        # 金色系的渐变颜色
+        def gold_gradient(pos, total):
+            progress = pos / total
+            if progress < 0.3:
+                return (255, 215, 0)  # 金色
+            elif progress < 0.6:
+                return (255, 200, 100)  # 浅金
+            else:
+                return (255, 240, 200)  # 白金色
+
+        edge_height = 50
+
+        # 上边缘 - 从上向下渐变
+        edge_surf = pygame.Surface((SCREEN_WIDTH, edge_height), pygame.SRCALPHA)
+        for y in range(edge_height):
+            alpha = int(edge_alpha * (1 - y / edge_height) ** 1.5)
+            for x in range(0, SCREEN_WIDTH, 4):
+                wave = math.sin(t * 2 + x * 0.02) * 0.3 + 0.7
+                color = gold_gradient(x, SCREEN_WIDTH)
+                final_alpha = int(alpha * wave)
+                pygame.draw.line(edge_surf, (*color, final_alpha), (x, y), (x + 4, y))
+        self.screen.blit(edge_surf, (0, 0))
+
+        # 下边缘 - 从下向上渐变
+        edge_surf = pygame.Surface((SCREEN_WIDTH, edge_height), pygame.SRCALPHA)
+        for y in range(edge_height):
+            alpha = int(edge_alpha * (y / edge_height) ** 1.5)  # 反转渐变方向
+            for x in range(0, SCREEN_WIDTH, 4):
+                wave = math.sin(t * 2 + x * 0.02) * 0.3 + 0.7
+                color = gold_gradient(x, SCREEN_WIDTH)
+                final_alpha = int(alpha * wave)
+                pygame.draw.line(edge_surf, (*color, final_alpha), (x, y), (x + 4, y))
+        self.screen.blit(edge_surf, (0, SCREEN_HEIGHT - edge_height))
+
+        edge_width = 50
+
+        # 左边缘 - 从左向右渐变
+        edge_surf = pygame.Surface((edge_width, SCREEN_HEIGHT), pygame.SRCALPHA)
+        for x in range(edge_width):
+            alpha = int(edge_alpha * (1 - x / edge_width) ** 1.5)
+            for y in range(0, SCREEN_HEIGHT, 4):
+                wave = math.sin(t * 2 + y * 0.02) * 0.3 + 0.7
+                color = gold_gradient(y, SCREEN_HEIGHT)
+                final_alpha = int(alpha * wave)
+                pygame.draw.line(edge_surf, (*color, final_alpha), (x, y), (x, y + 4))
+        self.screen.blit(edge_surf, (0, 0))
+
+        # 右边缘 - 从右向左渐变
+        edge_surf = pygame.Surface((edge_width, SCREEN_HEIGHT), pygame.SRCALPHA)
+        for x in range(edge_width):
+            alpha = int(edge_alpha * (x / edge_width) ** 1.5)  # 反转渐变方向
+            for y in range(0, SCREEN_HEIGHT, 4):
+                wave = math.sin(t * 2 + y * 0.02) * 0.3 + 0.7
+                color = gold_gradient(y, SCREEN_HEIGHT)
+                final_alpha = int(alpha * wave)
+                pygame.draw.line(edge_surf, (*color, final_alpha), (x, y), (x, y + 4))
+        self.screen.blit(edge_surf, (SCREEN_WIDTH - edge_width, 0))
+
     def draw_neon_text(self, surface: pygame.Surface, text: str, font: pygame.font.Font,
                         x: int, y: int, color: Tuple[int, int, int], glow_size: int = 2, pulse: bool = False):
         for radius, base_a in [(4, 25), (2, 50)]:
@@ -603,9 +730,26 @@ class Game:
     def draw_neon_block(self, surface: pygame.Surface, x: int, y: int, color: Tuple[int, int, int], size: int = GRID_SIZE):
         breath = 0.92 + 0.08 * math.sin(self.time * 3)
         r, g, b = color
-        r = min(255, int(r * breath))
-        g = min(255, int(g * breath))
-        b = min(255, int(b * breath))
+
+        # 升级闪光效果 - 更强烈的金色闪光
+        if self.block_flash > 0:
+            flash_intensity = self.block_flash ** 0.7  # 更持久的闪光感
+            # 金色到白色的闪光
+            t = self.time
+            flash_wave = 0.5 + 0.5 * math.sin(t * 8)  # 快速闪烁
+            # 金色闪光 (255, 215, 0) -> 白色 (255, 255, 255)
+            flash_r = 255
+            flash_g = int(215 + 40 * flash_wave)
+            flash_b = int(100 * flash_wave)
+            # 更强的混合效果
+            r = min(255, int(r + (255 - r) * flash_intensity * 0.8))
+            g = min(255, int(g + (255 - g) * flash_intensity * 0.7))
+            b = min(255, int(b + (255 - b) * flash_intensity * 0.5))
+            breath = min(1.5, breath + flash_intensity * 0.5)
+        else:
+            r = min(255, int(r * breath))
+            g = min(255, int(g * breath))
+            b = min(255, int(b * breath))
         
         glow_surf = pygame.Surface((size + 20, size + 20), pygame.SRCALPHA)
         for i in range(10, 0, -2):
@@ -989,7 +1133,10 @@ class Game:
             self.tetris_flash_effect -= 1
         if self.combo_shake > 0:
             self.combo_shake -= 1
-        
+
+        # 更新升级特效
+        self.update_level_up_effects()
+
         if self.state == "playing":
             self.fall_timer += dt
             if self.fall_timer >= self.fall_speed:
@@ -1095,6 +1242,7 @@ class Game:
                 self.draw_trails()
                 self.draw_particles()
                 self.draw_floating_texts()
+                self.draw_level_up_effects()  # 升级特效绘制在最上层
             elif self.state == "paused":
                 self.draw_background()
                 self.draw_grid()
