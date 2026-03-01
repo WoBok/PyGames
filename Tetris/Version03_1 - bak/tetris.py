@@ -428,20 +428,8 @@ class Tetromino:
 
 class Game:
     def __init__(self):
-        # 尝试使用硬件加速
-        flags = pygame.HWSURFACE | pygame.DOUBLEBUF
-        try:
-            self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), flags)
-            self.hw_accelerated = True
-        except:
-            # 如果硬件加速不支持，回退到普通模式
-            self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-            self.hw_accelerated = False
+        self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         pygame.display.set_caption("Tetris - Neon Edition")
-        self.clock = pygame.time.Clock()
-
-        # 预创建并转换常用的 Surface 为硬件加速格式
-        self._init_surfaces()
         self.clock = pygame.time.Clock()
         
         try:
@@ -521,24 +509,6 @@ class Game:
         }
         self.key_repeat_delay = 170
         self.key_repeat_interval = 50
-
-    def _init_surfaces(self):
-        """预创建常用的 Surface 缓存"""
-        # 背景缓存 - 使用 convert 加速 blit
-        self.bg_surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
-        self.bg_surface.fill((10, 10, 20))
-
-        # 网格缓存
-        self.grid_surface = pygame.Surface((BOARD_WIDTH, BOARD_HEIGHT), pygame.SRCALPHA)
-        for x in range(GRID_WIDTH + 1):
-            pygame.draw.line(self.grid_surface, (40, 40, 60, 100), (x * GRID_SIZE, 0), (x * GRID_SIZE, BOARD_HEIGHT))
-        for y in range(GRID_HEIGHT + 1):
-            pygame.draw.line(self.grid_surface, (40, 40, 60, 100), (0, y * GRID_SIZE), (BOARD_WIDTH, y * GRID_SIZE))
-
-        # 面板背景缓存
-        self.panel_bg_surface = pygame.Surface((PANEL_WIDTH, BOARD_HEIGHT), pygame.SRCALPHA)
-        for y in range(BOARD_HEIGHT):
-            pygame.draw.line(self.panel_bg_surface, (20, 20, 40, 50), (0, y), (PANEL_WIDTH, y))
     
     def load_high_score(self) -> int:
         try:
@@ -991,7 +961,12 @@ class Game:
         surface.blit(ghost_surf, (x, y))
     
     def draw_grid(self):
-        self.screen.blit(self.grid_surface, (BOARD_X + self.shake_offset[0], BOARD_Y + self.shake_offset[1]))
+        grid_surf = pygame.Surface((BOARD_WIDTH, BOARD_HEIGHT), pygame.SRCALPHA)
+        for x in range(GRID_WIDTH + 1):
+            pygame.draw.line(grid_surf, (40, 40, 60, 100), (x * GRID_SIZE, 0), (x * GRID_SIZE, BOARD_HEIGHT))
+        for y in range(GRID_HEIGHT + 1):
+            pygame.draw.line(grid_surf, (40, 40, 60, 100), (0, y * GRID_SIZE), (BOARD_WIDTH, y * GRID_SIZE))
+        self.screen.blit(grid_surf, (BOARD_X + self.shake_offset[0], BOARD_Y + self.shake_offset[1]))
     
     def draw_board(self):
         for y in range(2, GRID_HEIGHT + 2):
@@ -1047,8 +1022,11 @@ class Game:
         pygame.draw.line(self.screen, (r, g, b), (divider_x, BOARD_Y), (divider_x, BOARD_Y + BOARD_HEIGHT), 1)
     
     def draw_panel(self):
-        # 使用缓存的面板背景
-        self.screen.blit(self.panel_bg_surface, (PANEL_X, BOARD_Y))
+        panel_surf = pygame.Surface((PANEL_WIDTH, BOARD_HEIGHT), pygame.SRCALPHA)
+        for y in range(BOARD_HEIGHT):
+            alpha = 30 + int(20 * math.sin(y * 0.02 + self.time * 2))
+            pygame.draw.line(panel_surf, (20, 20, 40, alpha), (0, y), (PANEL_WIDTH, y))
+        self.screen.blit(panel_surf, (PANEL_X, BOARD_Y))
         
         title_text = "TETRIS"
         title_x = PANEL_X + (PANEL_WIDTH - self.font_medium.size(title_text)[0]) // 2
@@ -1086,9 +1064,8 @@ class Game:
         self.screen.blit(help_text, (PANEL_X + 20, BOARD_Y + BOARD_HEIGHT - 30))
     
     def draw_background(self):
-        # 使用缓存的背景 Surface
-        self.screen.blit(self.bg_surface, (0, 0))
-
+        self.screen.fill((10, 10, 20))
+        
         for star in self.stars:
             star.update(self.time)
             star.draw(self.screen)
