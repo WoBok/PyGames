@@ -3,9 +3,33 @@ import random
 import math
 import json
 import os
+import sys
 from typing import List, Tuple, Optional
 
+# 获取资源路径（支持打包后的exe）
+def get_resource_path(relative_path):
+    """获取资源文件的绝对路径，支持打包后和开发模式"""
+    if getattr(sys, 'frozen', False):
+        # 打包后的exe模式：资源在临时目录
+        base_path = sys._MEIPASS
+    else:
+        # 开发模式
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_path, relative_path)
+
+def get_data_path(filename):
+    """获取数据文件路径（如highscore.json），保存在exe所在目录"""
+    if getattr(sys, 'frozen', False):
+        # 打包后：保存在exe所在目录
+        base_path = os.path.dirname(sys.executable)
+    else:
+        # 开发模式
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_path, filename)
+
 pygame.init()
+pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+pygame.mixer.set_num_channels(16)  # 设置16个音效通道，支持同时播放多个音效
 
 GRID_SIZE = 32
 GRID_WIDTH = 10
@@ -399,7 +423,151 @@ class Star:
         color = (alpha, alpha, alpha)
         pygame.draw.circle(surface, color, (int(self.x), int(self.y)), self.size)
 
+class SoundManager:
+    """音效管理器"""
+    def __init__(self):
+        self.sounds = {}
+        self.bgm_tracks = []
+        self.current_bgm_index = 0
+        self.bgm_playing = False
+        self.bgm_paused = False
+        self.bgm_delay_timer = 0
+        self.waiting_for_next_bgm = False
+        self.bgm_volume = 0.8  # BGM音量 (0.0 - 1.0)，在这里调节
+        self.load_sounds()
+
+    def load_sounds(self):
+        """加载所有音效"""
+        audio_dir = get_resource_path("Audio")
+
+        # 加载背景音乐 (BGM1, BGM2, BGM3)
+        for i in range(1, 4):
+            bgm_path = os.path.join(audio_dir, f"1. BGM{i}.mp3")
+            if os.path.exists(bgm_path):
+                self.bgm_tracks.append(bgm_path)
+
+        # 加载音效及其音量设置
+        # 音量范围: 0.0 - 1.0，升级音效是两倍
+        sound_files = {
+            'game_over': ("2. Game Over.wav", 1),
+            'drop': ("3. Drop.wav", 0.5),
+            'move': ("4. Move.wav", 0.4),
+            'land': ("5. Land.wav", 1),  # 落地音量大一点
+            'rotation': ("6. Rotation.wav", 0.3),
+            'level_up': ("8. Level Up.wav", 1),  # 升级音效两倍
+            'tetris': ("9. TETRIS.wav", 1),
+            'clear_line': ("10. Clear Line.wav", 1),  # 消行音量大一点
+            'plummet': ("11. Plummet .wav", 0.5),  # 注意文件名有空格
+        }
+
+        for key, (filename, volume) in sound_files.items():
+            path = os.path.join(audio_dir, filename)
+            if os.path.exists(path):
+                try:
+                    sound = pygame.mixer.Sound(path)
+                    # 设置音量，确保不超过1.0
+                    #sound.set_volume(min(1.0, volume))
+                    sound.set_volume(volume)
+                    self.sounds[key] = sound
+                except:
+                    pass
+
+        # 加载连击音效 (Combo01-08)
+        for i in range(1, 9):
+            combo_path = os.path.join(audio_dir, f"7. Combo{i:02d}.wav")
+            if os.path.exists(combo_path):
+                try:
+                    sound = pygame.mixer.Sound(combo_path)
+                    sound.set_volume(1)
+                    self.sounds[f'combo_{i}'] = sound
+                except:
+                    pass
+
+    def play_bgm(self):
+        """开始播放背景音乐"""
+        if not self.bgm_tracks:
+            return
+        self.bgm_playing = True
+        self.current_bgm_index = 0
+        self.waiting_for_next_bgm = False
+        self.bgm_delay_timer = 0
+        pygame.mixer.music.load(self.bgm_tracks[0])
+        pygame.mixer.music.set_volume(self.bgm_volume)  # 设置BGM音量
+        pygame.mixer.music.play()
+
+    def stop_bgm(self):
+        """停止背景音乐"""
+        pygame.mixer.music.stop()
+        self.bgm_playing = False
+        self.bgm_paused = False
+        self.waiting_for_next_bgm = False
+
+    def pause_bgm(self):
+        """暂停背景音乐"""
+        if self.bgm_playing and not self.bgm_paused:
+            pygame.mixer.music.pause()
+            self.bgm_paused = True
+
+    def resume_bgm(self):
+        """恢复背景音乐"""
+        if self.bgm_playing and self.bgm_paused:
+            pygame.mixer.music.unpause()
+            self.bgm_paused = False
+
+    def update_bgm(self, dt: float):
+        """更新背景音乐状态"""
+        if not self.bgm_playing or self.bgm_paused:
+            return
+
+        # 检查是否在等待下一首BGM
+        if self.waiting_for_next_bgm:
+            self.bgm_delay_timer += dt
+            if self.bgm_delay_timer >= 1.0:  # 停顿1秒
+                self.waiting_for_next_bgm = False
+                self.bgm_delay_timer = 0
+                self._play_next_bgm()
+            return
+
+        # 检查当前BGM是否播放完毕
+        if not pygame.mixer.music.get_busy():
+            # 如果是第3首（索引2），循环播放
+            if self.current_bgm_index == 2:
+                pygame.mixer.music.set_volume(self.bgm_volume)  # 设置BGM音量
+                pygame.mixer.music.play()
+            else:
+                # 等待1秒后播放下一首
+                self.waiting_for_next_bgm = True
+                self.bgm_delay_timer = 0
+
+    def _play_next_bgm(self):
+        """播放下一首背景音乐"""
+        if self.current_bgm_index < 2:  # 还没到第3首
+            self.current_bgm_index += 1
+        pygame.mixer.music.load(self.bgm_tracks[self.current_bgm_index])
+        pygame.mixer.music.set_volume(self.bgm_volume)  # 设置BGM音量
+        pygame.mixer.music.play()
+
+    def play_sound(self, sound_name: str):
+        """播放音效"""
+        if sound_name in self.sounds:
+            self.sounds[sound_name].play()
+
+    def play_combo(self, combo_count: int):
+        """播放连击音效"""
+        if combo_count < 1 or combo_count > 8:
+            combo_count = min(8, max(1, combo_count))
+        sound_key = f'combo_{combo_count}'
+        if sound_key in self.sounds:
+            self.sounds[sound_key].play()
+
 class Tetromino:
+    def __init__(self, shape_type: str):
+        self.type = shape_type
+        self.rotation = 0
+        self.x = GRID_WIDTH // 2 - 1
+        self.y = 0
+        self.color = NEON_COLORS[shape_type]
+        self.shapes = SHAPES[shape_type]
     def __init__(self, shape_type: str):
         self.type = shape_type
         self.rotation = 0
@@ -440,6 +608,9 @@ class Game:
         pygame.display.set_caption("Tetris - Neon Edition")
         self.clock = pygame.time.Clock()
 
+        # 初始化音效管理器
+        self.sound_manager = SoundManager()
+
         # 预创建并转换常用的 Surface 为硬件加速格式
         self._init_surfaces()
         self.clock = pygame.time.Clock()
@@ -461,21 +632,29 @@ class Game:
                 self.font_small = pygame.font.SysFont(self.font_name, 16)
                 self.font_tiny = pygame.font.SysFont(self.font_name, 14)
                 # 加粗字体用于标题
+                self.font_title_xlarge = pygame.font.SysFont(self.font_name, 72, bold=True)  # TETRIS 1.5x放大
                 self.font_title_large = pygame.font.SysFont(self.font_name, 48, bold=True)
                 self.font_title_medium = pygame.font.SysFont(self.font_name, 32, bold=True)
+                self.font_score = pygame.font.SysFont(self.font_name, 20, bold=True)  # 游戏结束分数/暂停提示字体
             else:
                 self.font_large = pygame.font.Font(None, 48)
                 self.font_medium = pygame.font.Font(None, 32)
                 self.font_small = pygame.font.Font(None, 20)
                 self.font_tiny = pygame.font.Font(None, 16)
                 # 加粗字体用于标题
+                self.font_title_xlarge = pygame.font.Font(None, 72, bold=True)  # TETRIS 1.5x放大
                 self.font_title_large = pygame.font.Font(None, 48, bold=True)
                 self.font_title_medium = pygame.font.Font(None, 32, bold=True)
+                self.font_score = pygame.font.Font(None, 24, bold=True)  # 游戏结束分数/暂停提示字体
         except:
             self.font_large = pygame.font.Font(None, 48)
             self.font_medium = pygame.font.Font(None, 32)
             self.font_small = pygame.font.Font(None, 20)
             self.font_tiny = pygame.font.Font(None, 16)
+            self.font_title_xlarge = pygame.font.Font(None, 72, bold=True)
+            self.font_title_large = pygame.font.Font(None, 48, bold=True)
+            self.font_title_medium = pygame.font.Font(None, 32, bold=True)
+            self.font_score = pygame.font.Font(None, 24, bold=True)
         
         self.high_score = self.load_high_score()
         self.reset_game()
@@ -542,14 +721,16 @@ class Game:
     
     def load_high_score(self) -> int:
         try:
-            with open("highscore.json", "r") as f:
+            filepath = get_data_path("highscore.json")
+            with open(filepath, "r") as f:
                 return json.load(f).get("high_score", 0)
         except:
             return 0
-    
+
     def save_high_score(self):
         try:
-            with open("highscore.json", "w") as f:
+            filepath = get_data_path("highscore.json")
+            with open(filepath, "w") as f:
                 json.dump({"high_score": self.high_score}, f)
         except:
             pass
@@ -559,15 +740,15 @@ class Game:
         self.current_piece: Optional[Tetromino] = None
         self.next_piece = self.new_piece()
         self.spawn_piece()
-        
+
         self.score = 0
         self.lines = 0
         self.level = 1
         self.combo = 0
-        
+
         self.fall_timer = 0
         self.fall_speed = 1.0
-        
+
         self.particles = []
         self.floating_texts = []
         self.trail_positions = []
@@ -587,6 +768,9 @@ class Game:
         self.slow_motion_timer = 0
         self.slow_motion_factor = 1.0
         self.level_up_pause = False
+
+        # 停止背景音乐
+        self.sound_manager.stop_bgm()
 
     def new_piece(self) -> Tetromino:
         return Tetromino(random.choice(list(SHAPES.keys())))
@@ -613,7 +797,7 @@ class Game:
                 return False
         return True
     
-    def move_piece(self, dx: int, dy: int, add_trail: bool = False) -> bool:
+    def move_piece(self, dx: int, dy: int, add_trail: bool = False, is_natural_fall: bool = False, is_player_move: bool = False) -> bool:
         if self.current_piece and self.is_valid_position(self.current_piece, dx, dy):
             self.current_piece.x += dx
             self.current_piece.y += dy
@@ -627,6 +811,16 @@ class Game:
                     self.trail_positions.append((BOARD_X + x * GRID_SIZE + GRID_SIZE // 2,
                                                   BOARD_Y + (y - 2) * GRID_SIZE + GRID_SIZE // 2,
                                                   self.current_piece.color, 1.0))
+
+            # 播放音效
+            if is_natural_fall:
+                # 自由下落音效 - 只在方块出现在屏幕上时播放（y >= 2 表示在屏幕内）
+                if self.current_piece.y >= 2:
+                    self.sound_manager.play_sound('drop')
+            elif is_player_move:
+                # 玩家移动音效（左右和下）
+                self.sound_manager.play_sound('move')
+
             return True
         return False
     
@@ -638,8 +832,13 @@ class Game:
             for dx in [-1, 1, -2, 2]:
                 if self.is_valid_position(self.current_piece, dx, 0):
                     self.current_piece.x += dx
+                    # 旋转成功，播放音效
+                    self.sound_manager.play_sound('rotation')
                     return
             self.current_piece.rotate_back()
+        else:
+            # 旋转成功，播放音效
+            self.sound_manager.play_sound('rotation')
     
     def hard_drop(self):
         if not self.current_piece:
@@ -647,6 +846,8 @@ class Game:
         drop_distance = 0
         while self.move_piece(0, 1, add_trail=True):  # 硬降产生拖影
             drop_distance += 1
+        # 播放速降音效
+        self.sound_manager.play_sound('plummet')
         self.lock_piece()
     
     def get_ghost_position(self) -> List[Tuple[int, int]]:
@@ -664,15 +865,21 @@ class Game:
         for x, y in self.current_piece.get_blocks():
             if 0 <= y < GRID_HEIGHT + 2 and 0 <= x < GRID_WIDTH:
                 self.grid[y][x] = self.current_piece.type
-        
+
+        # 播放落地音效
+        self.sound_manager.play_sound('land')
+
         cleared = self.clear_lines()
         if cleared > 0:
             self.calculate_score(cleared)
         else:
             self.combo = 0
-        
+
         if not self.spawn_piece():
             self.state = "gameover"
+            # 播放游戏结束音效
+            self.sound_manager.stop_bgm()
+            self.sound_manager.play_sound('game_over')
             if self.score > self.high_score:
                 self.high_score = self.score
                 self.save_high_score()
@@ -707,9 +914,13 @@ class Game:
                 self.grid.insert(0, [None for _ in range(GRID_WIDTH)])
         
         return len(lines_to_clear)
-    
+
     def calculate_score(self, lines_cleared: int):
         self.lines += lines_cleared
+
+        # 播放消行音效
+        self.sound_manager.play_sound('clear_line')
+
         multiplier = 2 ** (self.level - 1)
         line_score = (lines_cleared ** 2) * multiplier
         self.score += line_score
@@ -721,6 +932,8 @@ class Game:
             self.score += combo_bonus
             shake_intensity = min(5, self.combo)
             self.combo_shake = shake_intensity * 15
+            # 播放连击音效
+            self.sound_manager.play_combo(self.combo)
 
         # 先计算 y_pos 位置
         if self.current_piece:
@@ -750,6 +963,8 @@ class Game:
 
         if lines_cleared == 4:
             text = f"TETRIS! +{line_score}"
+            # 播放TETRIS音效
+            self.sound_manager.play_sound('tetris')
             self.floating_texts.append(FloatingText(BOARD_X + BOARD_WIDTH // 2, y_pos, text, (255, 255, 255), 20, True, 0))
         else:
             self.floating_texts.append(FloatingText(BOARD_X + BOARD_WIDTH // 2, y_pos, f"+{line_score}", (255, 255, 255), 16, False, 0))
@@ -764,6 +979,9 @@ class Game:
             self.level_up_effect = 45
             self.shake_offset = [random.randint(-10, 10), random.randint(-10, 10)]
             self.fall_speed = max(0.08, 1.0 - (self.level - 1) * 0.08)
+
+            # 播放升级音效
+            self.sound_manager.play_sound('level_up')
 
             # 升级暂停：暂停方块下落，等待特效播放完成
             self.level_up_pause = True
@@ -1051,8 +1269,8 @@ class Game:
         self.screen.blit(self.panel_bg_surface, (PANEL_X, BOARD_Y))
         
         title_text = "TETRIS"
-        title_x = PANEL_X + (PANEL_WIDTH - self.font_medium.size(title_text)[0]) // 2
-        self.draw_rainbow_title(self.screen, title_text, self.font_title_medium, title_x, BOARD_Y + 40)
+        title_x = PANEL_X + (PANEL_WIDTH - self.font_title_medium.size(title_text)[0]) // 2
+        self.draw_rainbow_title(self.screen, title_text, self.font_title_medium, title_x, BOARD_Y  + 40)
         
         labels = [
             ("下一个", BOARD_Y + 120),
@@ -1171,15 +1389,15 @@ class Game:
     
     def draw_start_screen(self):
         self.draw_background()
-        
+
         overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 150))
         self.screen.blit(overlay, (0, 0))
-        
+
         title_text = "TETRIS"
-        title_x = (SCREEN_WIDTH - self.font_large.size(title_text)[0]) // 2
-        self.draw_rainbow_title(self.screen, title_text, self.font_title_large, title_x, 150)
-        
+        title_x = (SCREEN_WIDTH - self.font_title_xlarge.size(title_text)[0]) // 2
+        self.draw_rainbow_title(self.screen, title_text, self.font_title_xlarge, title_x, 120)
+
         instructions = [
             "← → : 移动",
             "↑ : 旋转",
@@ -1188,25 +1406,45 @@ class Game:
             "P : 暂停",
             "R : 重新开始",
             "H : 帮助",
-            "",
-            "按 空格 开始游戏"
         ]
-        
+
         y = 280
         for line in instructions:
             text = self.font_small.render(line, True, (200, 200, 220))
             self.screen.blit(text, ((SCREEN_WIDTH - text.get_width()) // 2, y))
             y += 35
-    
+
+        # 按空格开始游戏，空格加粗高亮（与游戏结束界面的R一致）
+        if self.font_name:
+            key_font = pygame.font.SysFont(self.font_name, 14, bold=True)
+            normal_font = pygame.font.SysFont(self.font_name, 14)
+        else:
+            key_font = pygame.font.Font(None, 18)
+            normal_font = pygame.font.Font(None, 18)
+
+        text_before = normal_font.render("按 ", True, (150, 150, 180))
+        text_key = key_font.render("空格", True, (255, 200, 0))  # 空格加粗高亮
+        text_after = normal_font.render(" 开始游戏", True, (150, 150, 180))
+
+        total_width = text_before.get_width() + text_key.get_width() + text_after.get_width()
+        start_x = (SCREEN_WIDTH - total_width) // 2
+        y_pos = SCREEN_HEIGHT - 50  # 与游戏结束界面"按R重新开始"位置一致
+
+        self.screen.blit(text_before, (start_x, y_pos))
+        self.screen.blit(text_key, (start_x + text_before.get_width(), y_pos))
+        self.screen.blit(text_after, (start_x + text_before.get_width() + text_key.get_width(), y_pos))
+
     def draw_pause_screen(self):
         overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 180))
         self.screen.blit(overlay, (0, 0))
-        
-        self.draw_rainbow_title(self.screen, "暂停", self.font_title_large, (SCREEN_WIDTH - 70) // 2, SCREEN_HEIGHT // 2 - 50)
-        
-        resume_text = self.font_medium.render("按 P 继续", True, (200, 200, 220))
-        self.screen.blit(resume_text, ((SCREEN_WIDTH - resume_text.get_width()) // 2, SCREEN_HEIGHT // 2 + 20))
+
+        title_x = (SCREEN_WIDTH - self.font_title_large.size("暂停")[0]) // 2
+        self.draw_rainbow_title(self.screen, "暂停", self.font_title_large, title_x, 150)
+
+        # 按 P 继续放在下三分之一处
+        resume_text = self.font_small.render("按 P 继续", True, (200, 200, 220))
+        self.screen.blit(resume_text, ((SCREEN_WIDTH - resume_text.get_width()) // 2, SCREEN_HEIGHT * 2 // 3 - 100))
     
     def draw_help_screen(self):
         self.draw_background()
@@ -1268,29 +1506,42 @@ class Game:
         self.draw_grid()
         self.draw_board()
         self.draw_panel()
-        
+
         overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 180))
         self.screen.blit(overlay, (0, 0))
-        
+
         title_text = "游戏结束"
         title_x = (SCREEN_WIDTH - self.font_title_large.size(title_text)[0]) // 2
-        self.draw_rainbow_title(self.screen, title_text, self.font_title_large, title_x, int(SCREEN_HEIGHT / 4))
+        self.draw_rainbow_title(self.screen, title_text, self.font_title_large, title_x, 150)
 
-        # 得分字体加粗
-        if self.font_name:
-            score_font = pygame.font.SysFont(self.font_name, 20, bold=True)
-        else:
-            score_font = pygame.font.Font(None, 24, bold=True)
-        score_text = score_font.render(f"得分: {self.score}", True, (255, 255, 255))
-        self.screen.blit(score_text, ((SCREEN_WIDTH - score_text.get_width()) // 2, int(SCREEN_HEIGHT / 3) + 70))
-        
+        # 得分放在下三分之一处
+        score_text = self.font_small.render(f"得分: {self.score}", True, (200, 200, 220))
+        self.screen.blit(score_text, ((SCREEN_WIDTH - score_text.get_width()) // 2, SCREEN_HEIGHT * 2 // 3 - 100))
+
         if self.score >= self.high_score:
             best_text = self.font_small.render("新纪录!", True, (255, 200, 0))
-            self.screen.blit(best_text, ((SCREEN_WIDTH - best_text.get_width()) // 2, int(SCREEN_HEIGHT / 3) + 100))
+            self.screen.blit(best_text, ((SCREEN_WIDTH - best_text.get_width()) // 2, SCREEN_HEIGHT * 2 // 3 + 35))
 
-        restart_text = self.font_tiny.render("按 R 重新开始", True, (150, 150, 180))
-        self.screen.blit(restart_text, ((SCREEN_WIDTH - restart_text.get_width()) // 2, int(SCREEN_HEIGHT / 3) + 140))
+        # 按R重新开始靠近下边缘，R加粗高亮
+        if self.font_name:
+            r_font = pygame.font.SysFont(self.font_name, 14, bold=True)
+            normal_font = pygame.font.SysFont(self.font_name, 14)
+        else:
+            r_font = pygame.font.Font(None, 18)
+            normal_font = pygame.font.Font(None, 18)
+
+        text_before_r = normal_font.render("按 ", True, (150, 150, 180))
+        text_r = r_font.render("R", True, (255, 200, 0))  # R加粗高亮
+        text_after_r = normal_font.render(" 重新开始", True, (150, 150, 180))
+
+        total_width = text_before_r.get_width() + text_r.get_width() + text_after_r.get_width()
+        start_x = (SCREEN_WIDTH - total_width) // 2
+        y_pos = SCREEN_HEIGHT - 50  # 靠近下边缘
+
+        self.screen.blit(text_before_r, (start_x, y_pos))
+        self.screen.blit(text_r, (start_x + text_before_r.get_width(), y_pos))
+        self.screen.blit(text_after_r, (start_x + text_before_r.get_width() + text_r.get_width(), y_pos))
     
     def update(self, dt: float):
         # 应用慢动作
@@ -1340,18 +1591,21 @@ class Game:
         self.update_level_up_effects()
 
         if self.state == "playing":
+            # 更新背景音乐
+            self.sound_manager.update_bgm(actual_dt)
+
             # 升级特效期间使用最慢速度（第一关速度）
             if self.level_up_pause:
                 self.fall_timer += actual_dt
                 if self.fall_timer >= 1.0:  # 第一关速度
                     self.fall_timer = 0
-                    if not self.move_piece(0, 1):
+                    if not self.move_piece(0, 1, is_natural_fall=True):
                         self.lock_piece()
             else:
                 self.fall_timer += actual_dt
                 if self.fall_timer >= self.fall_speed:
                     self.fall_timer = 0
-                    if not self.move_piece(0, 1):
+                    if not self.move_piece(0, 1, is_natural_fall=True):
                         self.lock_piece()
     
     def handle_input(self, event: pygame.event.Event):
@@ -1359,6 +1613,8 @@ class Game:
             if self.state == "start":
                 if event.key == pygame.K_SPACE:
                     self.state = "playing"
+                    # 开始播放背景音乐
+                    self.sound_manager.play_bgm()
                 elif event.key == pygame.K_h:
                     self.previous_state = "start"
                     self.state = "help"
@@ -1368,17 +1624,22 @@ class Game:
             elif self.state == "playing":
                 if event.key == pygame.K_p:
                     self.state = "paused"
+                    # 暂停背景音乐
+                    self.sound_manager.pause_bgm()
                 elif event.key == pygame.K_h:
                     self.previous_state = "playing"
                     self.state = "help"
                 elif event.key == pygame.K_LEFT:
-                    self.move_piece(-1, 0)
+                    if self.move_piece(-1, 0, is_player_move=True):
+                        pass  # 音效已在 move_piece 中播放
                     self.key_repeat_timers[pygame.K_LEFT] = self.key_repeat_delay
                 elif event.key == pygame.K_RIGHT:
-                    self.move_piece(1, 0)
+                    if self.move_piece(1, 0, is_player_move=True):
+                        pass  # 音效已在 move_piece 中播放
                     self.key_repeat_timers[pygame.K_RIGHT] = self.key_repeat_delay
                 elif event.key == pygame.K_DOWN:
-                    self.move_piece(0, 1, add_trail=True)  # 玩家主动加速下落，产生拖影
+                    if self.move_piece(0, 1, add_trail=True, is_player_move=True):
+                        pass  # 音效已在 move_piece 中播放
                     self.key_repeat_timers[pygame.K_DOWN] = self.key_repeat_delay
                 elif event.key == pygame.K_UP:
                     self.rotate_piece()
@@ -1386,13 +1647,19 @@ class Game:
                     self.hard_drop()
                 elif event.key == pygame.K_r:
                     self.reset_game()
+                    # 重新开始背景音乐
+                    self.sound_manager.play_bgm()
             elif self.state == "paused":
                 if event.key == pygame.K_p:
                     self.state = "playing"
+                    # 恢复背景音乐
+                    self.sound_manager.resume_bgm()
             elif self.state == "gameover":
                 if event.key == pygame.K_r:
                     self.reset_game()
                     self.state = "playing"
+                    # 重新开始背景音乐
+                    self.sound_manager.play_bgm()
         
         elif event.type == pygame.KEYUP:
             if event.key in self.key_repeat_timers:
@@ -1401,9 +1668,9 @@ class Game:
     def handle_continuous_input(self, dt: int):
         if self.state != "playing":
             return
-        
+
         keys = pygame.key.get_pressed()
-        
+
         for key in [pygame.K_LEFT, pygame.K_RIGHT, pygame.K_DOWN]:
             if keys[key]:
                 if self.key_repeat_timers[key] > 0:
@@ -1411,11 +1678,11 @@ class Game:
                     if self.key_repeat_timers[key] <= 0:
                         self.key_repeat_timers[key] = self.key_repeat_interval
                         if key == pygame.K_LEFT:
-                            self.move_piece(-1, 0)
+                            self.move_piece(-1, 0, is_player_move=True)
                         elif key == pygame.K_RIGHT:
-                            self.move_piece(1, 0)
+                            self.move_piece(1, 0, is_player_move=True)
                         elif key == pygame.K_DOWN:
-                            self.move_piece(0, 1, add_trail=True)  # 玩家主动加速下落，产生拖影
+                            self.move_piece(0, 1, add_trail=True, is_player_move=True)
     
     def run(self):
         running = True
