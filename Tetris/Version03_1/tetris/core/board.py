@@ -3,7 +3,7 @@
 from typing import List, Optional, Tuple
 import random
 
-from ..config import GRID_WIDTH, GRID_HEIGHT, NEON_COLORS, GameConfig
+from ..config import GRID_WIDTH, GRID_HEIGHT, NEON_COLORS, GameConfig, BASE_WIDTH
 from .tetromino import Tetromino
 
 
@@ -14,6 +14,8 @@ class Board:
         self.config = config or GameConfig()
         self.width = self.config.grid_width
         self.height = self.config.grid_height
+        self.left_offset = 0  # 左侧扩展的列数
+        self.expand_side = 'right'  # 下一次扩展的方向：先右侧，再左侧
         # 游戏板网格（多2行用于上方缓冲）
         self.grid: List[List[Optional[str]]] = [
             [None for _ in range(self.width)]
@@ -79,11 +81,40 @@ class Board:
         return False
 
     def reset(self) -> None:
-        """重置游戏板"""
+        """重置游戏板（恢复初始宽度）"""
+        self.width = self.config.initial_width
+        self.left_offset = 0
+        self.expand_side = 'right'
+        self.config.update_width(self.config.initial_width, left_offset=0)
         self.grid = [
             [None for _ in range(self.width)]
             for _ in range(self.height + 2)
         ]
+
+    def expand_width(self, new_width: int) -> None:
+        """扩展棋盘宽度（左右交替：先右侧，再左侧）"""
+        if new_width <= self.width:
+            return
+        additional = new_width - self.width
+
+        if self.expand_side == 'right':
+            # 扩展右侧
+            for row in self.grid:
+                row.extend([None for _ in range(additional)])
+            self.expand_side = 'left'
+        else:
+            # 扩展左侧：在每行开头插入空格，现有方块位置向右偏移
+            for row in self.grid:
+                row.insert(0, None)
+            self.left_offset += 1
+            self.expand_side = 'right'
+
+        self.width = new_width
+        self.config.update_width(new_width, left_offset=self.left_offset)
+
+    def get_expand_side(self) -> str:
+        """获取下一次扩展的方向"""
+        return self.expand_side
 
     def get_row(self, y: int) -> List[Optional[str]]:
         """获取指定行"""

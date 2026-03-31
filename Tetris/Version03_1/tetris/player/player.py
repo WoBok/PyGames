@@ -153,7 +153,7 @@ class Player:
         shake = tuple(self.effects.shake_offset)
 
         # 绘制网格
-        renderer.draw_grid(shake)
+        renderer.draw_grid(self.engine.board, shake)
 
         # 绘制游戏板
         renderer.draw_board(self.engine.board, shake)

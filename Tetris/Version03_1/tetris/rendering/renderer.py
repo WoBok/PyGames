@@ -34,28 +34,12 @@ class Renderer:
 
     def _init_surfaces(self) -> None:
         """预创建常用Surface"""
-        # 背景缓存
+        # 背景缓存（与窗口大小一致）
         self.bg_surface = pygame.Surface((self.config.screen_width, self.config.screen_height))
         self.bg_surface.fill((10, 10, 20))
 
-        # 网格缓存
-        grid_width = self.config.grid_width * self.config.grid_size
+        # 面板背景缓存（面板宽度固定为180）
         grid_height = self.config.grid_height * self.config.grid_size
-        self.grid_surface = pygame.Surface((grid_width, grid_height), pygame.SRCALPHA)
-        for x in range(self.config.grid_width + 1):
-            pygame.draw.line(
-                self.grid_surface, (40, 40, 60, 100),
-                (x * self.config.grid_size, 0),
-                (x * self.config.grid_size, grid_height)
-            )
-        for y in range(self.config.grid_height + 1):
-            pygame.draw.line(
-                self.grid_surface, (40, 40, 60, 100),
-                (0, y * self.config.grid_size),
-                (grid_width, y * self.config.grid_size)
-            )
-
-        # 面板背景缓存
         self.panel_bg_surface = pygame.Surface((self.config.panel_width, grid_height), pygame.SRCALPHA)
         for y in range(grid_height):
             pygame.draw.line(
@@ -67,6 +51,11 @@ class Renderer:
         """更新渲染状态"""
         self.time += dt
         self.block_renderer.update_time(dt)
+
+    def update_config(self, config: GameConfig) -> None:
+        """更新配置（窗口大小变化时）"""
+        self.config = config
+        self._init_surfaces()
 
     def set_block_flash(self, flash: float) -> None:
         """设置方块闪光"""
@@ -83,18 +72,36 @@ class Renderer:
                 star.update(self.time)
                 star.draw(self.screen)
 
-    def draw_grid(self, offset: Tuple[int, int] = (0, 0)) -> None:
+    def draw_grid(self, board: Board, offset: Tuple[int, int] = (0, 0)) -> None:
         """绘制网格"""
         x = self.config.board_x + offset[0]
         y = self.config.board_y + offset[1]
-        self.screen.blit(self.grid_surface, (x, y))
+
+        # 动态绘制网格线（使用实际 board 宽度）
+        grid_width = board.width * self.config.grid_size
+        grid_height = self.config.grid_height * self.config.grid_size
+
+        for gx in range(board.width + 1):
+            line_x = x + gx * self.config.grid_size
+            pygame.draw.line(
+                self.screen, (40, 40, 60, 100),
+                (line_x, y),
+                (line_x, y + grid_height)
+            )
+        for gy in range(self.config.grid_height + 1):
+            line_y = y + gy * self.config.grid_size
+            pygame.draw.line(
+                self.screen, (40, 40, 60, 100),
+                (x, line_y),
+                (x + grid_width, line_y)
+            )
 
     # ==================== 方块渲染 ====================
 
     def draw_board(self, board: Board, offset: Tuple[int, int] = (0, 0)) -> None:
         """绘制游戏板"""
         for y in range(2, self.config.grid_height + 2):
-            for x in range(self.config.grid_width):
+            for x in range(board.width):
                 cell = board.get_cell(x, y)
                 if cell is not None:
                     color = NEON_COLORS.get(cell, (255, 255, 255))

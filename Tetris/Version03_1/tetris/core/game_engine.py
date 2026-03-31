@@ -4,7 +4,7 @@ from typing import Optional, List, Tuple, Callable, Dict, Any
 import random
 import math
 
-from ..config import GRID_WIDTH, GRID_HEIGHT, BOARD_X, BOARD_Y, GRID_SIZE, NEON_COLORS, GameConfig
+from ..config import GRID_WIDTH, GRID_HEIGHT, BOARD_X, BOARD_Y, GRID_SIZE, NEON_COLORS, GameConfig, get_width_for_level
 from ..audio import SoundManager
 from .board import Board
 from .tetromino import Tetromino
@@ -80,7 +80,19 @@ class GameEngine:
         self.trail_positions: List[Tuple[float, float, Tuple[int, int, int], float]] = []
 
         # 初始化
+        self.scoring.set_level_up_callback(self._on_level_up)
         self.reset()
+
+    def _on_level_up(self, new_level: int) -> None:
+        """升级时扩展棋盘"""
+        new_width = get_width_for_level(new_level)
+        if new_width > self.board.width:
+            # 检查是否是左侧扩展
+            if self.board.expand_side == 'left':
+                # 下一次是左侧扩展，当前方块位置需要向右偏移
+                if self.current_piece:
+                    self.current_piece.x += 1
+            self.board.expand_width(new_width)
 
     def reset(self) -> None:
         """重置游戏"""
@@ -104,7 +116,11 @@ class GameEngine:
     def _spawn_piece(self) -> bool:
         """放置方块"""
         self.current_piece = self.next_piece
-        self.current_piece.x = self.config.grid_width // 2 - 1
+        # 计算方块居中位置
+        min_x, max_x, min_y, max_y = self.current_piece.get_bounds()
+        piece_width = max_x - min_x + 1
+        center_x = (self.board.width - piece_width) // 2 - min_x
+        self.current_piece.x = center_x
         self.current_piece.y = 0
         self.next_piece = self._new_piece()
 

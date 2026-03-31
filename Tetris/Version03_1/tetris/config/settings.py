@@ -4,8 +4,14 @@ from typing import Dict, List, Tuple
 
 # 方块尺寸（可配置）
 GRID_SIZE = 32
+BASE_WIDTH = 10  # 基准宽度（Level 1）
 GRID_WIDTH = 10
 GRID_HEIGHT = 20
+
+
+def get_width_for_level(level: int) -> int:
+    """根据关卡计算棋盘宽度"""
+    return BASE_WIDTH + (level - 1)
 
 # 游戏板尺寸
 BOARD_WIDTH = GRID_WIDTH * GRID_SIZE
@@ -86,6 +92,7 @@ class GameConfig:
         self.board_x = board_x
         self.board_y = board_y
         self.panel_width = panel_width
+        self.initial_width = BASE_WIDTH  # 初始宽度（用于重置）
 
         # 计算派生尺寸
         self.board_width = grid_width * grid_size
@@ -93,6 +100,15 @@ class GameConfig:
         self.panel_x = board_x + self.board_width
         self.screen_width = self.board_width + panel_width
         self.screen_height = self.board_height
+
+    def update_width(self, new_width: int, left_offset: int = 0) -> None:
+        """动态更新棋盘宽度"""
+        self.grid_width = new_width
+        self.board_width = new_width * self.grid_size
+        # board_x 保持为 0，窗口宽度增加
+        self.board_x = 0
+        self.panel_x = self.board_width
+        self.screen_width = self.board_width + self.panel_width
 
     def get_neon_color(self, piece_type: str) -> Tuple[int, int, int]:
         """获取方块颜色"""

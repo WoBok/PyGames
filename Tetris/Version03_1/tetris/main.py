@@ -85,11 +85,18 @@ class GameRunner:
         """设置玩家"""
         if self.num_players == 1:
             # 单人模式
-            self.player_manager.add_player("player1", (0, 0))
+            player = self.player_manager.add_player("player1", (0, 0))
+            # 订阅升级事件以触发窗口调整
+            player.engine.events.level_up.subscribe(self._on_level_up)
         else:
             # 多人模式（需要调整布局）
             # TODO: 实现多人布局
-            self.player_manager.add_player("player1", (0, 0))
+            player = self.player_manager.add_player("player1", (0, 0))
+            player.engine.events.level_up.subscribe(self._on_level_up)
+
+    def _on_level_up(self, level: int) -> None:
+        """升级时调整窗口大小"""
+        self._resize_window()
 
     def _load_high_score(self) -> int:
         """加载最高分"""
@@ -101,10 +108,23 @@ class GameRunner:
         filepath = get_data_path("highscore.json")
         save_json_data(filepath, {"high_score": self.high_score})
 
+    def _resize_window(self) -> None:
+        """调整窗口大小"""
+        self.screen = pygame.display.set_mode(
+            (self.config.screen_width, self.config.screen_height)
+        )
+        self.renderer.update_config(self.config)
+        # 更新星星边界
+        for star in self.stars:
+            star.max_x = self.config.screen_width
+            star.max_y = self.config.screen_height
+
     def reset_game(self) -> None:
         """重置游戏"""
         self.player_manager.reset_all()
         self.sound_manager.stop_bgm()
+        # 重置窗口大小
+        self._resize_window()
 
     def handle_input(self, event: pygame.event.Event) -> None:
         """处理输入"""
@@ -221,7 +241,7 @@ class GameRunner:
             player = self.player_manager.get_player("player1")
             if player:
                 self.renderer.draw_background(self.stars)
-                self.renderer.draw_grid()
+                self.renderer.draw_grid(player.engine.board)
                 self.renderer.draw_board(player.engine.board)
                 if player.engine.current_piece:
                     self.renderer.draw_piece(player.engine.current_piece)
@@ -239,7 +259,7 @@ class GameRunner:
             player = self.player_manager.get_player("player1")
             if player:
                 self.renderer.draw_background(self.stars)
-                self.renderer.draw_grid()
+                self.renderer.draw_grid(player.engine.board)
                 self.renderer.draw_board(player.engine.board)
                 self.renderer.draw_panel(
                     self.high_score,

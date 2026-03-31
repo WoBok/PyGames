@@ -1,6 +1,6 @@
 """计分系统"""
 
-from typing import Optional
+from typing import Optional, Callable
 from .tetromino import Tetromino
 
 
@@ -14,6 +14,11 @@ class ScoringSystem:
         self.combo = 0
         self.fall_speed = 1.0
         self.lines_per_level = 10
+        self.level_up_callback: Optional[Callable[[int], None]] = None
+
+    def set_level_up_callback(self, callback: Callable[[int], None]) -> None:
+        """设置升级回调函数"""
+        self.level_up_callback = callback
 
     def calculate_score(self, lines_cleared: int) -> int:
         """计算得分，返回本次得分"""
@@ -36,6 +41,8 @@ class ScoringSystem:
         if new_level > self.level:
             self.level = new_level
             self.update_fall_speed()
+            if self.level_up_callback:
+                self.level_up_callback(new_level)
 
         return base_score
 
